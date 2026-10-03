@@ -4,3 +4,21 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+anyhow = "1.0.104"
+clap = { version = "4.6.7", features = ["derive", "string"] }
+env_logger = "0.11.11"
+glob = "0.3.4"
+log = "0.4.34"
+rayon = "1.12.0"
+regex = "1.13.1"
+serde = { version = "1.0.229", features = ["derive"] }
+tera = "2.4.0"
+toml = { version = "1.1.6", features = ["serde"] }
+yaml_serde = "0.10.7"
+
+[dev-dependencies]
+tempfile = "3.27.0"
+
+[lints.rust]
+# Young project: keep helpers and getters around until their first consumer lands
+dead_code = "allow"
