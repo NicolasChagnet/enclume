@@ -1,26 +1,93 @@
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
+
+use anyhow::Context;
 
 pub const COLLECTIONS_DIR: &str = "collections";
 pub const CONTENT_DIR: &str = "root";
 pub const TEMPLATES_DIR: &str = "templates";
 
-/// Absolute path, with symlinks resolved in the part of the path that exists
+/// The directory roots of a site
+///
+/// `base` and `out` are absolute with symlinks resolved in the part that
+/// exists. Not-yet-created paths, such as a fresh output directory, must
+/// resolve to the same form as existing ones, or prefix checks and the
+/// deletion guards fail. Every path below these roots is a [`SitePath`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Roots {
+    base: PathBuf,
+    out: PathBuf,
+}
+
+impl Roots {
+    /// Resolve both roots, refusing overlapping trees before anything is deleted
+    pub fn new(base: PathBuf, out: PathBuf) -> anyhow::Result<Self> {
+        let base = std::path::absolute(&base)?;
+        let base = std::fs::canonicalize(&base)
+            .with_context(|| format!("Base directory {} does not exist", base.display()))?;
+        let out = resolve_existing_prefix(&std::path::absolute(out)?);
+        let roots = Self { base, out };
+        if roots.base.starts_with(&roots.out) || roots.out.starts_with(&roots.base) {
+            anyhow::bail!(
+                "Output directory {} overlaps base directory {}",
+                roots.out.display(),
+                roots.base.display()
+            );
+        }
+        Ok(roots)
+    }
+
+    pub fn base(&self) -> &Path {
+        &self.base
+    }
+
+    pub fn out(&self) -> &Path {
+        &self.out
+    }
+
+    pub fn content_dir(&self) -> PathBuf {
+        self.base.join(CONTENT_DIR)
+    }
+
+    pub fn templates_dir(&self) -> PathBuf {
+        self.base.join(TEMPLATES_DIR)
+    }
+
+    pub fn collections_dir(&self) -> PathBuf {
+        self.base.join(COLLECTIONS_DIR)
+    }
+}
+
+/// Resolve symlinks in the part of `path` that exists, keeping any missing tail
+fn resolve_existing_prefix(path: &Path) -> PathBuf {
+    let mut candidate = path;
+    let mut tail: Vec<&std::ffi::OsStr> = Vec::new();
+    loop {
+        if let Ok(mut resolved) = std::fs::canonicalize(candidate) {
+            for name in tail.iter().rev() {
+                resolved.push(*name);
+            }
+            return resolved;
+        }
+        match (candidate.parent(), candidate.file_name()) {
+            (Some(parent), Some(name)) => {
+                tail.push(name);
+                candidate = parent;
+            }
+            _ => return path.to_path_buf(),
+        }
+    }
+}
+
+/// A path relative to a site root
+///
+/// Rejects absolute paths and `..`, so a content file name can never read or
+/// write outside its root.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct AbsPath(PathBuf);
+pub struct SitePath(PathBuf);
 
-impl AbsPath {
-    pub fn inner(&self) -> &Path {
+impl SitePath {
+    pub fn as_path(&self) -> &Path {
         &self.0
-    }
-
-    pub fn into_inner(self) -> PathBuf {
-        self.0
-    }
-
-    /// Re-root a path living under `base_dir` into `out_dir`
-    pub fn try_swap_base(&self, base_dir: &Path, out_dir: &Path) -> anyhow::Result<Self> {
-        let relative = self.0.strip_prefix(base_dir)?;
-        Ok(Self(out_dir.join(relative)))
     }
 
     /// Change the extension of the underlying path
@@ -29,39 +96,22 @@ impl AbsPath {
     }
 }
 
-impl TryFrom<PathBuf> for AbsPath {
+impl TryFrom<PathBuf> for SitePath {
     type Error = anyhow::Error;
 
     fn try_from(value: PathBuf) -> Result<Self, Self::Error> {
-        let path = std::path::absolute(value)?;
-        Ok(Self(resolve_symlinks(&path)))
+        let valid = !value.as_os_str().is_empty()
+            && value
+                .components()
+                .all(|component| matches!(component, Component::Normal(_)));
+        if !valid {
+            anyhow::bail!("Not a site-relative path: {}", value.display());
+        }
+        Ok(Self(value))
     }
 }
 
-impl AsRef<std::path::Path> for AbsPath {
-    fn as_ref(&self) -> &std::path::Path {
-        &self.0
-    }
-}
-
-/// Resolve symlinks in `path`, falling back to its parent for missing targets
-///
-/// Not-yet-created paths, such as a fresh output directory, must resolve to the
-/// same form as existing ones, or path comparisons and `strip_prefix` fail.
-fn resolve_symlinks(path: &Path) -> PathBuf {
-    if let Ok(resolved) = std::fs::canonicalize(path) {
-        return resolved;
-    }
-    match (path.parent(), path.file_name()) {
-        (Some(parent), Some(name)) => match std::fs::canonicalize(parent) {
-            Ok(parent) => parent.join(name),
-            Err(_) => path.to_path_buf(),
-        },
-        _ => path.to_path_buf(),
-    }
-}
-
-impl std::fmt::Display for AbsPath {
+impl std::fmt::Display for SitePath {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.0.to_string_lossy())
     }
@@ -71,36 +121,51 @@ impl std::fmt::Display for AbsPath {
 mod tests {
     use super::*;
 
-    fn abs(path: &str) -> AbsPath {
-        AbsPath::try_from(PathBuf::from(path)).unwrap()
+    fn site_path(path: &str) -> anyhow::Result<SitePath> {
+        SitePath::try_from(PathBuf::from(path))
     }
 
     #[test]
-    fn swaps_base_directory_for_output_directory() {
-        let file = abs("/site/root/blog/post.html");
-        let swapped = file
-            .try_swap_base(Path::new("/site/root"), Path::new("/build"))
-            .unwrap();
-        assert_eq!(swapped, abs("/build/blog/post.html"));
-    }
-
-    #[test]
-    fn rejects_paths_outside_the_base_directory() {
-        let file = abs("/site/root/post.html");
-        assert!(
-            file.try_swap_base(Path::new("/other"), Path::new("/build"))
-                .is_err()
-        );
-    }
-
-    #[test]
-    fn resolves_missing_paths_against_their_canonical_parent() {
+    fn resolves_a_missing_out_under_its_existing_parent() {
         let dir = tempfile::tempdir().unwrap();
-        let canonical = std::fs::canonicalize(dir.path()).unwrap();
-        let missing = AbsPath::try_from(canonical.join("dist")).unwrap();
-        let created_afterwards = AbsPath::try_from(dir.path().join("dist")).unwrap();
+        std::fs::create_dir(dir.path().join("src")).unwrap();
 
-        assert_eq!(missing, created_afterwards);
-        assert_eq!(missing.inner().parent(), Some(canonical.as_path()));
+        let roots = Roots::new(dir.path().join("src"), dir.path().join("dist")).unwrap();
+
+        let canonical = std::fs::canonicalize(dir.path()).unwrap();
+        assert_eq!(roots.base(), canonical.join("src"));
+        assert_eq!(roots.out(), canonical.join("dist"));
+    }
+
+    #[test]
+    fn rejects_a_missing_base_directory() {
+        let dir = tempfile::tempdir().unwrap();
+
+        assert!(Roots::new(dir.path().join("src"), dir.path().join("dist")).is_err());
+    }
+
+    #[test]
+    fn rejects_overlapping_roots() {
+        let dir = tempfile::tempdir().unwrap();
+        let base = dir.path().join("src");
+        std::fs::create_dir(&base).unwrap();
+
+        assert!(Roots::new(base.clone(), base.join("dist")).is_err());
+        assert!(Roots::new(base.clone(), base).is_err());
+    }
+
+    #[test]
+    fn rejects_paths_that_escape_their_root() {
+        for path in ["/etc/passwd", "../secret", "blog/../../secret", ""] {
+            assert!(site_path(path).is_err(), "{path:?} was accepted");
+        }
+    }
+
+    #[test]
+    fn keeps_nested_relative_paths() {
+        assert_eq!(
+            site_path("blog/post.md").unwrap().as_path(),
+            Path::new("blog/post.md")
+        );
     }
 }

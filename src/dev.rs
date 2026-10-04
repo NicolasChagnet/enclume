@@ -2,28 +2,24 @@ use anyhow::{Context, Result};
 use axum::Router;
 use notify::{RecommendedWatcher, RecursiveMode};
 use notify_debouncer_full::{DebounceEventResult, Debouncer, RecommendedCache, new_debouncer};
-use std::{sync::mpsc, time::Duration};
+use std::{path::Path, sync::mpsc, time::Duration};
 use tokio::signal;
 use tower_http::services::ServeDir;
 
-use crate::{build::Builder, path::AbsPath};
+use crate::{build::Builder, path::Roots};
 
 const HOST: &str = "127.0.0.1";
 const PORT: u16 = 3000;
 
 /// Build once, then serve `out` and rebuild on every change under `base`
-pub async fn serve_and_watch(
-    base: AbsPath,
-    out: AbsPath,
-    builder: impl Builder + Send + 'static,
-) -> Result<()> {
+pub async fn serve_and_watch(roots: Roots, builder: impl Builder + Send + 'static) -> Result<()> {
     builder.build()?;
 
     // The watcher must stay in scope while the server runs
-    let (_watcher, events) = watch(&base)?;
+    let (_watcher, events) = watch(roots.base())?;
 
     tokio::select! {
-        result = serve(out) => result?,
+        result = serve(roots.out()) => result?,
         result = rebuild(events, builder) => result?,
         result = signal::ctrl_c() => {
             result?;
@@ -34,8 +30,8 @@ pub async fn serve_and_watch(
 }
 
 /// Serve the built site from `out`
-async fn serve(out: AbsPath) -> Result<()> {
-    let app = Router::new().fallback_service(ServeDir::new(out.as_ref()));
+async fn serve(out: &Path) -> Result<()> {
+    let app = Router::new().fallback_service(ServeDir::new(out));
     let listener = tokio::net::TcpListener::bind((HOST, PORT))
         .await
         .with_context(|| format!("Could not bind {HOST}:{PORT}"))?;
@@ -46,7 +42,7 @@ async fn serve(out: AbsPath) -> Result<()> {
 
 /// Watch `base` recursively and forward debounced events
 fn watch(
-    base: &AbsPath,
+    base: &Path,
 ) -> Result<(
     Debouncer<RecommendedWatcher, RecommendedCache>,
     mpsc::Receiver<DebounceEventResult>,
@@ -58,9 +54,9 @@ fn watch(
     })
     .context("Could not create the file watcher")?;
     debouncer
-        .watch(base.as_ref(), RecursiveMode::Recursive)
-        .with_context(|| format!("Could not watch {}", base.inner().display()))?;
-    log::info!("Watching {} for changes", base.inner().display());
+        .watch(base, RecursiveMode::Recursive)
+        .with_context(|| format!("Could not watch {}", base.display()))?;
+    log::info!("Watching {} for changes", base.display());
 
     Ok((debouncer, rx))
 }

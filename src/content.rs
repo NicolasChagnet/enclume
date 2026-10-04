@@ -1,6 +1,8 @@
+use std::path::Path;
+
 use crate::{
     parsers::{ContentParser, ParsedMetadata, RawHtml, Var, VarMap},
-    path::AbsPath,
+    path::SitePath,
     templates::{Template, Templater, VAR_SLOT},
 };
 
@@ -24,55 +26,42 @@ impl ContentKind {
 }
 
 #[derive(Debug, Clone)]
-pub struct ContentSource(AbsPath);
+pub struct ContentSource<'a> {
+    content_dir: &'a Path,
+    file: SitePath,
+}
 
-impl ContentSource {
-    pub fn new(path: AbsPath) -> Self {
-        Self(path)
-    }
-
-    pub fn inner(&self) -> &AbsPath {
-        &self.0
-    }
-
-    pub fn into_inner(self) -> AbsPath {
-        self.0
+impl<'a> ContentSource<'a> {
+    pub fn new(content_dir: &'a Path, file: SitePath) -> Self {
+        Self { content_dir, file }
     }
 
     pub fn kind(&self) -> anyhow::Result<ContentKind> {
         let extension = self
-            .0
-            .inner()
+            .file
+            .as_path()
             .extension()
             .and_then(|s| s.to_str())
-            .ok_or_else(|| {
-                anyhow::anyhow!("Could not extract extension from {:?}", self.inner())
-            })?;
-        let val = match extension {
-            "md" => ContentKind::Markdown,
-            "html" => ContentKind::Html,
-            "json" => ContentKind::Json,
-            _ => anyhow::bail!("Extension {:?} could not be parsed!", extension),
-        };
-        Ok(val)
+            .ok_or_else(|| anyhow::anyhow!("Could not extract extension from {}", self.file))?;
+        ContentKind::try_from_extension(extension)
     }
 
     pub fn parse<P: ContentParser>(self, parser: &P) -> anyhow::Result<ContentParsed> {
-        let content = std::fs::read_to_string(self.0.inner())?;
+        let content = std::fs::read_to_string(self.content_dir.join(self.file.as_path()))?;
         let (metadata, body) = parser.parse(&content)?;
-        Ok(ContentParsed::new(self.0, metadata, body))
+        Ok(ContentParsed::new(self.file, metadata, body))
     }
 }
 
 #[derive(Debug, Clone)]
 pub struct ContentParsed {
-    original_file_path: AbsPath,
+    original_file_path: SitePath,
     metadata: ParsedMetadata,
     content: RawHtml,
 }
 
 impl ContentParsed {
-    pub fn new(original_file_path: AbsPath, metadata: ParsedMetadata, content: RawHtml) -> Self {
+    pub fn new(original_file_path: SitePath, metadata: ParsedMetadata, content: RawHtml) -> Self {
         Self {
             original_file_path,
             metadata,
@@ -80,7 +69,7 @@ impl ContentParsed {
         }
     }
 
-    pub fn path(&self) -> &AbsPath {
+    pub fn path(&self) -> &SitePath {
         &self.original_file_path
     }
 
@@ -139,13 +128,13 @@ mod tests {
     use crate::parsers::HtmlParser;
     use std::path::PathBuf;
 
-    fn source(path: &str) -> ContentSource {
-        ContentSource::new(AbsPath::try_from(PathBuf::from(path)).unwrap())
+    fn site_path(path: &str) -> SitePath {
+        SitePath::try_from(PathBuf::from(path)).unwrap()
     }
 
     fn element(metadata: &[(&str, &str)]) -> ContentParsed {
         ContentParsed::new(
-            AbsPath::try_from(PathBuf::from("/site/root/post.html")).unwrap(),
+            site_path("blog/post.html"),
             ParsedMetadata::new(
                 metadata
                     .iter()
@@ -158,23 +147,36 @@ mod tests {
 
     #[test]
     fn maps_source_extensions_to_content_kinds() {
+        let content_dir = Path::new("/site/root");
+
         assert!(matches!(
-            source("/site/root/post.md").kind().unwrap(),
+            ContentSource::new(content_dir, site_path("blog/post.md"))
+                .kind()
+                .unwrap(),
             ContentKind::Markdown
         ));
         assert!(matches!(
-            source("/site/root/post.html").kind().unwrap(),
+            ContentSource::new(content_dir, site_path("blog/post.html"))
+                .kind()
+                .unwrap(),
             ContentKind::Html
         ));
-        assert!(source("/site/root/style.css").kind().is_err());
+        assert!(
+            ContentSource::new(content_dir, site_path("assets/style.css"))
+                .kind()
+                .is_err()
+        );
     }
 
     #[test]
     fn parses_a_source_file_into_path_metadata_and_body() {
         let dir = tempfile::tempdir().unwrap();
-        let file = dir.path().join("post.html");
-        std::fs::write(&file, "---\ntitle: hi\n---\n<p>body</p>").unwrap();
-        let source = ContentSource::new(AbsPath::try_from(file).unwrap());
+        std::fs::write(
+            dir.path().join("post.html"),
+            "---\ntitle: hi\n---\n<p>body</p>",
+        )
+        .unwrap();
+        let source = ContentSource::new(dir.path(), site_path("post.html"));
 
         let parsed = source.parse(&HtmlParser::new()).unwrap();
 
@@ -183,7 +185,7 @@ mod tests {
             Some(&serde_json::json!("hi"))
         );
         assert_eq!(parsed.content().inner(), "<p>body</p>");
-        assert!(parsed.path().inner().ends_with("post.html"));
+        assert_eq!(parsed.path().as_path(), Path::new("post.html"));
     }
 
     #[test]

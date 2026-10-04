@@ -6,7 +6,7 @@ use clap::{Parser, Subcommand};
 use crate::{
     build::{Builder, SiteBuilder},
     parsers::MarkdownParserOptions,
-    path::AbsPath,
+    path::Roots,
 };
 
 mod build;
@@ -90,7 +90,8 @@ async fn main() -> Result<()> {
             out,
             markdown_args,
         } => {
-            let builder = SiteBuilder::new(base.try_into()?, out.try_into()?, markdown_args.into());
+            let roots = Roots::new(base, out)?;
+            let builder = SiteBuilder::new(roots, markdown_args.into());
             builder.build()?;
         }
         Command::Dev {
@@ -98,10 +99,9 @@ async fn main() -> Result<()> {
             out,
             markdown_args,
         } => {
-            let base: AbsPath = base.try_into()?;
-            let out: AbsPath = out.try_into()?;
-            let builder = SiteBuilder::new(base.clone(), out.clone(), markdown_args.into());
-            dev::serve_and_watch(base, out, builder).await?;
+            let roots = Roots::new(base, out)?;
+            let builder = SiteBuilder::new(roots.clone(), markdown_args.into());
+            dev::serve_and_watch(roots, builder).await?;
         }
     }
     Ok(())

@@ -1,24 +1,25 @@
+use std::path::Path;
+
 use crate::{
     glob::{glob_files, match_files},
-    path::{AbsPath, COLLECTIONS_DIR, CONTENT_DIR, TEMPLATES_DIR},
+    path::{Roots, SitePath},
     templates::{self, Template},
 };
 use serde::{Deserialize, Serialize};
-use std::ffi::OsStr;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CollectionFile {
-    /// Content file patterns, relative to `<base_dir>/root/`
+    /// Content file patterns, relative to `<base>/root/`
     pub pattern: String,
-    /// Template filename, relative to `<base_dir>/templates/`
+    /// Template filename, relative to `<base>/templates/`
     pub template: String,
     /// Variables the collection expects in the frontmatter of each file
     pub variables: Vec<String>,
 }
 
 impl CollectionFile {
-    pub fn parse_file(file: &AbsPath) -> anyhow::Result<Self> {
-        let content = std::fs::read(file.inner())?;
+    pub fn parse_file(file: &Path) -> anyhow::Result<Self> {
+        let content = std::fs::read(file)?;
         let parsed_content: Self = toml::from_slice(&content)?;
         Ok(parsed_content)
     }
@@ -27,7 +28,7 @@ impl CollectionFile {
 #[derive(Debug, Clone)]
 pub struct Collection {
     name: String,
-    files: Vec<AbsPath>,
+    files: Vec<SitePath>,
     template: templates::Template,
 }
 
@@ -36,7 +37,7 @@ impl Collection {
         &self.name
     }
 
-    pub fn files(&self) -> &[AbsPath] {
+    pub fn files(&self) -> &[SitePath] {
         &self.files
     }
 
@@ -46,40 +47,36 @@ impl Collection {
 
     /// Load a collection and select the content files matching its pattern
     pub fn try_load_file(
-        base_dir: &AbsPath,
-        collection_path: &AbsPath,
-        content_files: &[AbsPath],
+        roots: &Roots,
+        collection_path: &Path,
+        content_files: &[SitePath],
     ) -> anyhow::Result<Self> {
-        if !collection_path.inner().is_file()
-            || collection_path.inner().extension() != Some(OsStr::new("toml"))
-        {
-            anyhow::bail!("Invalid collection file: {collection_path}")
-        }
+        let collection_raw = CollectionFile::parse_file(collection_path).map_err(|e| {
+            e.context(format!(
+                "Could not load collection {}",
+                collection_path.display()
+            ))
+        })?;
 
-        let collection_raw = CollectionFile::parse_file(collection_path)
-            .map_err(|e| e.context(format!("Could not load collection {collection_path}")))?;
+        let files = match_files(&collection_raw.pattern, content_files)?;
 
-        let content_dir: AbsPath = base_dir.inner().join(CONTENT_DIR).try_into()?;
-        let files = match_files(content_dir.inner(), &collection_raw.pattern, content_files)?;
+        let template = Template::load(
+            roots
+                .templates_dir()
+                .join(&collection_raw.template)
+                .with_extension("html"),
+        )?;
 
-        let template_path: AbsPath = base_dir
-            .inner()
-            .join(TEMPLATES_DIR)
-            .join(&collection_raw.template)
-            .with_extension("html")
-            .try_into()?;
-        let template = Template::load(template_path)?;
-
-        let name = if let Some(name) = collection_path
-            .inner()
+        let name = collection_path
             .file_stem()
             .and_then(|s| s.to_str())
             .map(|s| s.to_string())
-        {
-            name
-        } else {
-            anyhow::bail!("Could not extract filename for {collection_path}")
-        };
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "Could not extract filename for {}",
+                    collection_path.display()
+                )
+            })?;
 
         Ok(Self {
             name,
@@ -88,12 +85,12 @@ impl Collection {
         })
     }
 
-    /// Load every collection declared in `<base_dir>/collections/`
-    pub fn load_all(base_dir: &AbsPath, content_files: &[AbsPath]) -> anyhow::Result<Vec<Self>> {
-        let collection_pattern = base_dir.inner().join(COLLECTIONS_DIR).join("*.toml");
+    /// Load every collection declared in `<base>/collections/`
+    pub fn load_all(roots: &Roots, content_files: &[SitePath]) -> anyhow::Result<Vec<Self>> {
+        let collection_pattern = roots.collections_dir().join("*.toml");
         glob_files(&collection_pattern)?
             .iter()
-            .map(|file| Collection::try_load_file(base_dir, file, content_files))
+            .map(|file| Collection::try_load_file(roots, file, content_files))
             .collect()
     }
 }

@@ -1,9 +1,8 @@
+use std::path::{Path, PathBuf};
+
 use anyhow::Context;
 
-use crate::{
-    parsers::{RawHtml, VarMap},
-    path::AbsPath,
-};
+use crate::parsers::{RawHtml, VarMap};
 
 pub const VAR_SLOT: &str = "slot";
 
@@ -31,7 +30,7 @@ impl TeraTemplater {
         self.engine.add_template_files(
             templates
                 .into_iter()
-                .map(|t| (t.file.inner(), Some(t.name.as_str()))),
+                .map(|t| (t.file.as_path(), Some(t.name.as_str()))),
         )?;
         Ok(())
     }
@@ -70,7 +69,7 @@ fn convert_values_into_context(values: VarMap) -> anyhow::Result<tera::Context> 
 #[derive(Debug, Clone)]
 pub struct Template {
     name: String,
-    file: AbsPath,
+    file: PathBuf,
 }
 
 impl Template {
@@ -78,20 +77,25 @@ impl Template {
         &self.name
     }
 
-    pub fn file(&self) -> &AbsPath {
+    pub fn file(&self) -> &Path {
         &self.file
     }
 
-    pub fn load(file: AbsPath) -> anyhow::Result<Self> {
-        if !file.inner().is_file() {
-            anyhow::bail!("Template file {file} does not exist or is not a file!")
+    pub fn load(file: impl Into<PathBuf>) -> anyhow::Result<Self> {
+        let file = file.into();
+        if !file.is_file() {
+            anyhow::bail!(
+                "Template file {} does not exist or is not a file!",
+                file.display()
+            )
         }
         // Register under the file name so tera autoescapes `*.html` templates
         let name = file
-            .inner()
             .file_name()
             .and_then(|s| s.to_str())
-            .ok_or_else(|| anyhow::anyhow!("Could not extract a template name from {file}"))?
+            .ok_or_else(|| {
+                anyhow::anyhow!("Could not extract a template name from {}", file.display())
+            })?
             .to_string();
         Ok(Self { name, file })
     }

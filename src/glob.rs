@@ -1,12 +1,12 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
-use crate::path::AbsPath;
+use crate::path::SitePath;
 
 /// Find all existing files matching a glob pattern.
 ///
 /// The `glob` crate has no brace support, so `{md,html}` alternatives are
 /// expanded into separate patterns before matching.
-pub fn glob_files(pattern: &Path) -> anyhow::Result<Vec<AbsPath>> {
+pub fn glob_files(pattern: &Path) -> anyhow::Result<Vec<PathBuf>> {
     let Some(pattern) = pattern.to_str() else {
         anyhow::bail!("Glob pattern {:?} is not valid UTF-8", pattern);
     };
@@ -22,9 +22,7 @@ pub fn glob_files(pattern: &Path) -> anyhow::Result<Vec<AbsPath>> {
                     continue;
                 }
             };
-            if path.is_file()
-                && let Ok(path) = AbsPath::try_from(path)
-            {
+            if path.is_file() {
                 files.push(path);
             }
         }
@@ -32,8 +30,8 @@ pub fn glob_files(pattern: &Path) -> anyhow::Result<Vec<AbsPath>> {
     Ok(files)
 }
 
-/// Select the files matching a pattern relative to `base`, without touching the filesystem
-pub fn match_files(base: &Path, pattern: &str, files: &[AbsPath]) -> anyhow::Result<Vec<AbsPath>> {
+/// Select the files matching a pattern relative to a site root, without touching the filesystem
+pub fn match_files(pattern: &str, files: &[SitePath]) -> anyhow::Result<Vec<SitePath>> {
     let patterns = expand_braces(pattern)
         .into_iter()
         .map(|p| {
@@ -46,14 +44,12 @@ pub fn match_files(base: &Path, pattern: &str, files: &[AbsPath]) -> anyhow::Res
         require_literal_separator: true,
         ..Default::default()
     };
-    let mut matched: Vec<AbsPath> = files
+    let mut matched: Vec<SitePath> = files
         .iter()
         .filter(|file| {
-            file.inner().strip_prefix(base).is_ok_and(|relative| {
-                patterns
-                    .iter()
-                    .any(|pattern| pattern.matches_path_with(relative, options))
-            })
+            patterns
+                .iter()
+                .any(|pattern| pattern.matches_path_with(file.as_path(), options))
         })
         .cloned()
         .collect();
@@ -101,18 +97,19 @@ mod tests {
     }
 
     #[test]
-    fn matches_files_relative_to_a_base_directory() {
-        let files = vec![
-            AbsPath::try_from(std::path::PathBuf::from("/site/root/blog/post.html")).unwrap(),
-            AbsPath::try_from(std::path::PathBuf::from("/site/root/blog/post.md")).unwrap(),
-            AbsPath::try_from(std::path::PathBuf::from("/site/root/other.html")).unwrap(),
-        ];
-        let matched = match_files(Path::new("/site/root"), "blog/**/*.{md,html}", &files).unwrap();
+    fn matches_files_relative_to_a_site_root() {
+        let files: Vec<SitePath> = ["blog/post.html", "blog/post.md", "other.html"]
+            .iter()
+            .map(|path| SitePath::try_from(PathBuf::from(path)).unwrap())
+            .collect();
+
+        let matched = match_files("blog/**/*.{md,html}", &files).unwrap();
+
         assert_eq!(matched.len(), 2);
         assert!(
             matched
                 .iter()
-                .all(|file| file.inner().starts_with("/site/root/blog"))
+                .all(|file| file.as_path().starts_with("blog"))
         );
     }
 }
