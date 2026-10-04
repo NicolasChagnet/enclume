@@ -37,7 +37,7 @@ The collection configurations defines the expected behavior of the collection. F
 
 # Relative to root/
 pattern = "blog/**/*.{md,html}"
-template = "post"
+template = "post.html"
 
 # Variables expected in the frontmatter of each file
 variables = ["title", "description", "published_on", "last_updated_on", "tag"]

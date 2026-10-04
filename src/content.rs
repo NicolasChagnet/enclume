@@ -3,7 +3,7 @@ use std::path::Path;
 use crate::{
     parsers::{ContentParser, ParsedMetadata, RawHtml, Var, VarMap},
     path::SitePath,
-    templates::{Template, Templater, VAR_SLOT},
+    templates::{Templater, VAR_SLOT},
 };
 
 #[derive(Debug, Clone, Copy)]
@@ -97,10 +97,10 @@ impl ContentParsed {
     pub fn render<T: Templater>(
         self,
         templater: &T,
-        template: &Template,
+        template: &str,
     ) -> anyhow::Result<RenderedContent> {
         let values = self.into_map()?;
-        let rendered_content = templater.render(template.name(), values)?;
+        let rendered_content = templater.render(template, values)?;
         Ok(RenderedContent::new(rendered_content))
     }
 }

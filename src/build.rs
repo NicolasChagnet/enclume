@@ -49,7 +49,7 @@ impl SiteBuilder {
         // Handle all collections
         let collections = Collection::load_all(&self.roots, &content_files)?;
         let mut templater = TeraTemplater::new();
-        templater.load_templates(collections.iter().map(|c| c.template()))?;
+        templater.load_templates(&self.roots.templates_dir())?;
         let html_parser = HtmlParser::new();
         let markdown_parser = MarkdownParser::new(self.markdown_options);
 
@@ -203,10 +203,10 @@ mod tests {
     use std::fs;
 
     const COLLECTION: &str =
-        "pattern = \"blog/**/*.{md,html}\"\ntemplate = \"post\"\nvariables = [\"title\"]\n";
+        "pattern = \"blog/**/*.{md,html}\"\ntemplate = \"post.html\"\nvariables = [\"title\"]\n";
 
     const JSON_COLLECTION: &str =
-        "pattern = \"blog/**/*.json\"\ntemplate = \"post\"\nvariables = [\"title\"]\n";
+        "pattern = \"blog/**/*.json\"\ntemplate = \"post.html\"\nvariables = [\"title\"]\n";
 
     struct Site {
         // Held to remove the temporary directory once the test ends
@@ -275,11 +275,26 @@ mod tests {
     }
 
     #[test]
+    fn loads_templates_no_collection_references() {
+        let site = Site::new();
+        site.write("templates/layout.html", "<main>{{ slot }}</main>");
+        site.write("templates/post.html", "{% include \"layout.html\" %}");
+        site.write("collections/blog.toml", COLLECTION);
+        site.write("root/blog/post.md", "---\ntitle: Hello\n---\n# body\n");
+
+        site.build().unwrap();
+
+        let page = site.read("blog/post.html");
+        assert!(page.contains("<main>"));
+        assert!(page.contains("<h1 id=\"body\">"));
+    }
+
+    #[test]
     fn fails_on_invalid_collection_file() {
         let site = Site::new();
         site.write(
             "collections/blog.toml",
-            "pattern = \"blog/**/*.html\"\ntemplate = \"post\"\n",
+            "pattern = \"blog/**/*.html\"\ntemplate = \"post.html\"\n",
         );
 
         let error = format!("{:#}", site.build().unwrap_err());

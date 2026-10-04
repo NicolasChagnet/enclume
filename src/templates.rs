@@ -1,4 +1,4 @@
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use anyhow::Context;
 
@@ -22,15 +22,27 @@ impl TeraTemplater {
         }
     }
 
-    /// Register templates with the engine, keyed by their file name
-    pub fn load_templates<'a>(
-        &mut self,
-        templates: impl IntoIterator<Item = &'a Template>,
-    ) -> anyhow::Result<()> {
+    /// Register every template in `template_dir`, keyed by its path relative to it
+    pub fn load_templates(&mut self, template_dir: &Path) -> anyhow::Result<()> {
+        let templates = crate::glob::glob_files(&template_dir.join("**/*.html"))?;
         self.engine.add_template_files(
             templates
                 .into_iter()
-                .map(|t| (t.file.as_path(), Some(t.name.as_str()))),
+                .map(|file| {
+                    let name = file
+                        .strip_prefix(template_dir)
+                        .with_context(|| {
+                            format!(
+                                "Template {} is not inside {}",
+                                file.display(),
+                                template_dir.display()
+                            )
+                        })?
+                        .to_string_lossy()
+                        .into_owned();
+                    Ok((file, Some(name)))
+                })
+                .collect::<anyhow::Result<Vec<_>>>()?,
         )?;
         Ok(())
     }
@@ -64,41 +76,6 @@ fn convert_values_into_context(values: VarMap) -> anyhow::Result<tera::Context> 
         }
     }
     Ok(context)
-}
-
-#[derive(Debug, Clone)]
-pub struct Template {
-    name: String,
-    file: PathBuf,
-}
-
-impl Template {
-    pub fn name(&self) -> &str {
-        &self.name
-    }
-
-    pub fn file(&self) -> &Path {
-        &self.file
-    }
-
-    pub fn load(file: impl Into<PathBuf>) -> anyhow::Result<Self> {
-        let file = file.into();
-        if !file.is_file() {
-            anyhow::bail!(
-                "Template file {} does not exist or is not a file!",
-                file.display()
-            )
-        }
-        // Register under the file name so tera autoescapes `*.html` templates
-        let name = file
-            .file_name()
-            .and_then(|s| s.to_str())
-            .ok_or_else(|| {
-                anyhow::anyhow!("Could not extract a template name from {}", file.display())
-            })?
-            .to_string();
-        Ok(Self { name, file })
-    }
 }
 
 #[cfg(test)]

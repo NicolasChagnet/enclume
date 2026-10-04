@@ -3,7 +3,6 @@ use std::path::Path;
 use crate::{
     glob::{glob_files, match_files},
     path::{Roots, SitePath},
-    templates::{self, Template},
 };
 use serde::{Deserialize, Serialize};
 
@@ -29,7 +28,7 @@ impl CollectionFile {
 pub struct Collection {
     name: String,
     files: Vec<SitePath>,
-    template: templates::Template,
+    template: String,
 }
 
 impl Collection {
@@ -41,13 +40,12 @@ impl Collection {
         &self.files
     }
 
-    pub fn template(&self) -> &templates::Template {
+    pub fn template(&self) -> &str {
         &self.template
     }
 
     /// Load a collection and select the content files matching its pattern
     pub fn try_load_file(
-        roots: &Roots,
         collection_path: &Path,
         content_files: &[SitePath],
     ) -> anyhow::Result<Self> {
@@ -60,12 +58,7 @@ impl Collection {
 
         let files = match_files(&collection_raw.pattern, content_files)?;
 
-        let template = Template::load(
-            roots
-                .templates_dir()
-                .join(&collection_raw.template)
-                .with_extension("html"),
-        )?;
+        let template = collection_raw.template;
 
         let name = collection_path
             .file_stem()
@@ -90,7 +83,7 @@ impl Collection {
         let collection_pattern = roots.collections_dir().join("*.toml");
         glob_files(&collection_pattern)?
             .iter()
-            .map(|file| Collection::try_load_file(roots, file, content_files))
+            .map(|file| Collection::try_load_file(file, content_files))
             .collect()
     }
 }
