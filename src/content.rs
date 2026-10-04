@@ -1,5 +1,5 @@
 use crate::{
-    parsers::{ContentParser, ParsedMetadata, RawHtml, StringMap},
+    parsers::{ContentParser, ParsedMetadata, RawHtml, Var, VarMap},
     path::AbsPath,
     templates::{Template, Templater, VAR_SLOT},
 };
@@ -96,12 +96,12 @@ impl ContentParsed {
     ///
     /// Errors when the frontmatter already declares the content slot variable,
     /// which would otherwise be overwritten without notice.
-    pub fn into_map(self) -> anyhow::Result<StringMap> {
+    pub fn into_map(self) -> anyhow::Result<VarMap> {
         let mut map = self.metadata.into_inner();
         if map.contains_key(VAR_SLOT) {
             anyhow::bail!("Frontmatter variable {VAR_SLOT:?} collides with the content slot");
         }
-        map.insert(VAR_SLOT.to_string(), self.content.into_inner());
+        map.insert(VAR_SLOT.to_string(), Var::String(self.content.into_inner()));
         Ok(map)
     }
 
@@ -111,7 +111,7 @@ impl ContentParsed {
         template: &Template,
     ) -> anyhow::Result<RenderedContent> {
         let values = self.into_map()?;
-        let rendered_content = templater.render(template.name(), &values)?;
+        let rendered_content = templater.render(template.name(), values)?;
         Ok(RenderedContent::new(rendered_content))
     }
 }
@@ -149,7 +149,7 @@ mod tests {
             ParsedMetadata::new(
                 metadata
                     .iter()
-                    .map(|(key, value)| (key.to_string(), value.to_string()))
+                    .map(|(key, value)| (key.to_string(), serde_json::json!(value)))
                     .collect(),
             ),
             RawHtml::new("<p>body</p>".to_string()),
@@ -180,7 +180,7 @@ mod tests {
 
         assert_eq!(
             parsed.metadata().inner().get("title"),
-            Some(&"hi".to_string())
+            Some(&serde_json::json!("hi"))
         );
         assert_eq!(parsed.content().inner(), "<p>body</p>");
         assert!(parsed.path().inner().ends_with("post.html"));
@@ -189,8 +189,8 @@ mod tests {
     #[test]
     fn adds_the_content_slot_to_the_variable_map() {
         let map = element(&[("title", "hi")]).into_map().unwrap();
-        assert_eq!(map.get("title"), Some(&"hi".to_string()));
-        assert_eq!(map.get(VAR_SLOT), Some(&"<p>body</p>".to_string()));
+        assert_eq!(map.get("title"), Some(&serde_json::json!("hi")));
+        assert_eq!(map.get(VAR_SLOT), Some(&serde_json::json!("<p>body</p>")));
     }
 
     #[test]

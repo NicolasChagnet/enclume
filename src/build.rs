@@ -9,7 +9,7 @@ use crate::{
     collection::Collection,
     content::{ContentKind, ContentSource},
     glob::glob_files,
-    parsers::{HtmlParser, MarkdownParser, MarkdownParserOptions},
+    parsers::{HtmlParser, JsonParser, MarkdownParser, MarkdownParserOptions},
     path::{AbsPath, CONTENT_DIR},
     templates::TeraTemplater,
 };
@@ -50,9 +50,7 @@ pub fn build(
             let parsed_element = match source_element.kind()? {
                 ContentKind::Html => source_element.parse(&html_parser),
                 ContentKind::Markdown => source_element.parse(&markdown_parser),
-                kind => Err(anyhow::anyhow!(
-                    "Parsing {kind:?} files is not implemented yet ({file})"
-                )),
+                ContentKind::Json => source_element.parse(&JsonParser),
             }
             .with_context(|| format!("Could not parse {file}"))?;
 
@@ -150,6 +148,9 @@ mod tests {
     const COLLECTION: &str =
         "pattern = \"blog/**/*.{md,html}\"\ntemplate = \"post\"\nvariables = [\"title\"]\n";
 
+    const JSON_COLLECTION: &str =
+        "pattern = \"blog/**/*.json\"\ntemplate = \"post\"\nvariables = [\"title\"]\n";
+
     struct Site {
         // Held to remove the temporary directory once the test ends
         _dir: tempfile::TempDir,
@@ -234,18 +235,40 @@ mod tests {
     }
 
     #[test]
-    fn fails_on_unsupported_content_kind() {
+    fn renders_json_collection_files() {
         let site = Site::new();
-        let collection =
-            "pattern = \"blog/**/*.json\"\ntemplate = \"post\"\nvariables = [\"title\"]\n";
+        site.write(
+            "templates/post.html",
+            "<h1>{{ title }}</h1><span>{{ views }}</span><slot>{{ slot }}</slot>\
+             {% for item in content.items %}<i>{{ item }}</i>{% endfor %}",
+        );
+        site.write("collections/blog.toml", JSON_COLLECTION);
+        site.write(
+            "root/blog/post.json",
+            r#"{"metadata": {"title": "Hello", "views": 42}, "content": {"items": ["a", "b"]}}"#,
+        );
+
+        site.build().unwrap();
+
+        let page = site.read("blog/post.html");
+        assert!(page.contains("<h1>Hello</h1>"));
+        assert!(page.contains("<span>42</span>"));
+        // JSON files have no body, so the slot is present but empty
+        assert!(page.contains("<slot></slot>"));
+        assert!(page.contains("<i>a</i><i>b</i>"));
+    }
+
+    #[test]
+    fn fails_on_invalid_json_content() {
+        let site = Site::new();
         site.write("templates/post.html", "{{ slot }}");
-        site.write("collections/blog.toml", collection);
-        site.write("root/blog/post.json", "{}");
+        site.write("collections/blog.toml", JSON_COLLECTION);
+        site.write("root/blog/post.json", "{");
 
         let error = format!("{:#}", site.build().unwrap_err());
 
         assert!(
-            error.contains("not implemented"),
+            error.contains("Could not parse JSON content"),
             "unexpected error: {error}"
         );
         assert!(error.contains("post.json"), "unexpected error: {error}");

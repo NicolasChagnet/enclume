@@ -1,6 +1,9 @@
+use anyhow::Context;
 use rushdown::{parser::ParserExtension, renderer::html::RendererExtension};
+use serde::Deserialize;
 
-pub type StringMap = std::collections::HashMap<String, String>;
+pub type Var = serde_json::Value;
+pub type VarMap = std::collections::HashMap<String, Var>;
 
 #[derive(Debug, Clone)]
 pub struct RawHtml(String);
@@ -8,6 +11,10 @@ pub struct RawHtml(String);
 impl RawHtml {
     pub fn new(value: String) -> Self {
         Self(value)
+    }
+
+    pub fn empty() -> Self {
+        Self("".to_string())
     }
 
     pub fn inner(&self) -> &str {
@@ -20,18 +27,18 @@ impl RawHtml {
 }
 
 #[derive(Debug, Clone)]
-pub struct ParsedMetadata(StringMap);
+pub struct ParsedMetadata(VarMap);
 
 impl ParsedMetadata {
-    pub fn new(value: StringMap) -> Self {
+    pub fn new(value: VarMap) -> Self {
         Self(value)
     }
 
-    pub fn inner(&self) -> &StringMap {
+    pub fn inner(&self) -> &VarMap {
         &self.0
     }
 
-    pub fn into_inner(self) -> StringMap {
+    pub fn into_inner(self) -> VarMap {
         self.0
     }
 }
@@ -259,9 +266,43 @@ fn split_yaml_frontmatter(content: &str) -> (&str, &str) {
 }
 
 /// Parse yaml frontmatter
-fn parse_yaml_frontmatter(frontmatter: &str) -> anyhow::Result<StringMap> {
+fn parse_yaml_frontmatter(frontmatter: &str) -> anyhow::Result<VarMap> {
     let map = yaml_serde::from_str(frontmatter)?;
     Ok(map)
+}
+
+/// Shape of a JSON content file
+///
+/// The `metadata` field feeds the template variables, while `content` holds
+/// arbitrary JSON exposed to templates as the [`VAR_CONTENT`] variable. JSON
+/// files have no body, so the content slot stays empty.
+#[derive(Debug, Clone, Deserialize)]
+struct JsonContentFormat {
+    metadata: Option<VarMap>,
+    content: Option<Var>,
+}
+
+/// Variable holding the `content` field of a JSON content file
+pub const VAR_CONTENT: &str = "content";
+
+/// JSON content parser
+///
+/// Reserved variables: [`VAR_CONTENT`] holds the top-level `content` field,
+/// and `slot` is injected empty by the build pipeline because JSON files have
+/// no body. Metadata keys that shadow a reserved variable are overwritten
+/// without notice.
+pub struct JsonParser;
+
+impl ContentParser for JsonParser {
+    fn parse(&self, content: &str) -> anyhow::Result<(ParsedMetadata, RawHtml)> {
+        let parsed_json: JsonContentFormat =
+            serde_json::from_str(content).context("Could not parse JSON content")?;
+        let mut metadata = parsed_json.metadata.unwrap_or_default();
+        if let Some(content) = parsed_json.content {
+            metadata.insert(VAR_CONTENT.to_string(), content);
+        }
+        Ok((ParsedMetadata::new(metadata), RawHtml::empty()))
+    }
 }
 
 #[cfg(test)]
@@ -296,7 +337,10 @@ mod tests {
             .parse("---\ntitle: hi\n---\n<p>body</p>")
             .unwrap();
 
-        assert_eq!(metadata.inner().get("title"), Some(&"hi".to_string()));
+        assert_eq!(
+            metadata.inner().get("title"),
+            Some(&serde_json::json!("hi"))
+        );
         assert_eq!(body.inner(), "<p>body</p>");
     }
 
@@ -313,7 +357,10 @@ mod tests {
             .parse("---\ntitle: hi\n---\n# Title\n\nSome *emphasis*.\n")
             .unwrap();
 
-        assert_eq!(metadata.inner().get("title"), Some(&"hi".to_string()));
+        assert_eq!(
+            metadata.inner().get("title"),
+            Some(&serde_json::json!("hi"))
+        );
         assert!(body.inner().contains("<h1"));
         assert!(body.inner().contains("<em>emphasis</em>"));
     }
@@ -358,5 +405,36 @@ mod tests {
             .parse(markdown)
             .unwrap();
         assert!(literal.inner().contains(":smile:"));
+    }
+
+    #[test]
+    fn parses_json_metadata_and_content() {
+        let input = r#"{"metadata": {"title": "hi", "views": 42}, "content": {"items": ["a"]}}"#;
+
+        let (metadata, body) = JsonParser.parse(input).unwrap();
+
+        assert_eq!(
+            metadata.inner().get("title"),
+            Some(&serde_json::json!("hi"))
+        );
+        assert_eq!(metadata.inner().get("views"), Some(&serde_json::json!(42)));
+        assert_eq!(
+            metadata.inner().get(VAR_CONTENT),
+            Some(&serde_json::json!({"items": ["a"]}))
+        );
+        assert_eq!(body.inner(), "");
+    }
+
+    #[test]
+    fn accepts_json_without_metadata_or_content() {
+        let (metadata, body) = JsonParser.parse("{}").unwrap();
+
+        assert!(metadata.inner().is_empty());
+        assert_eq!(body.inner(), "");
+    }
+
+    #[test]
+    fn rejects_invalid_json() {
+        assert!(JsonParser.parse("{").is_err());
     }
 }

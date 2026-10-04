@@ -1,12 +1,14 @@
+use anyhow::Context;
+
 use crate::{
-    parsers::{RawHtml, StringMap},
+    parsers::{RawHtml, VarMap},
     path::AbsPath,
 };
 
 pub const VAR_SLOT: &str = "slot";
 
 pub trait Templater {
-    fn render(&self, template_name: &str, values: &StringMap) -> anyhow::Result<RawHtml>;
+    fn render(&self, template_name: &str, values: VarMap) -> anyhow::Result<RawHtml>;
 }
 
 #[derive(Debug, Clone)]
@@ -36,26 +38,33 @@ impl TeraTemplater {
 }
 
 impl Templater for TeraTemplater {
-    fn render(&self, template_name: &str, values: &StringMap) -> anyhow::Result<RawHtml> {
-        let context = convert_values_into_context(values);
+    fn render(&self, template_name: &str, values: VarMap) -> anyhow::Result<RawHtml> {
+        let context = convert_values_into_context(values)?;
         let rendered = self.engine.render(template_name, &context)?;
         Ok(RawHtml::new(rendered))
     }
 }
 
-/// Convert the HashMap of values into the Context wrapper
-fn convert_values_into_context(values: &StringMap) -> tera::Context {
+/// Convert the variable map into a Tera context
+///
+/// Values keep their JSON type so templates can read structured content. The
+/// slot holds an HTML fragment parsed from the content file, so it bypasses
+/// the escaping applied to every other variable.
+fn convert_values_into_context(values: VarMap) -> anyhow::Result<tera::Context> {
     let mut context = tera::Context::new();
     for (key, value) in values {
         if key == VAR_SLOT {
-            // The slot holds an HTML fragment parsed from the content file, so
-            // it must bypass the escaping applied to every other variable
-            context.insert_value(key.clone(), tera::Value::safe_string(value));
+            let html = value
+                .as_str()
+                .with_context(|| format!("{VAR_SLOT} must be a string"))?;
+            context.insert_value(key, tera::Value::safe_string(html));
         } else {
-            context.insert(key.clone(), value);
+            let value = tera::Value::try_from_serializable(&value)
+                .with_context(|| format!("Could not convert variable {key:?} for the template"))?;
+            context.insert_value(key, value);
         }
     }
-    context
+    Ok(context)
 }
 
 #[derive(Debug, Clone)]
@@ -85,5 +94,34 @@ impl Template {
             .ok_or_else(|| anyhow::anyhow!("Could not extract a template name from {file}"))?
             .to_string();
         Ok(Self { name, file })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn keeps_json_value_types_in_the_context() {
+        let mut values = VarMap::new();
+        values.insert("views".to_string(), serde_json::json!(42));
+        values.insert("tags".to_string(), serde_json::json!(["a", "b"]));
+        values.insert(VAR_SLOT.to_string(), serde_json::json!("<p>body</p>"));
+
+        let context = convert_values_into_context(values).unwrap();
+
+        assert!(context.get("views").unwrap().is_number());
+        assert!(context.get("tags").unwrap().is_array());
+        let slot = context.get(VAR_SLOT).unwrap();
+        assert!(slot.is_safe());
+        assert_eq!(slot.as_str(), Some("<p>body</p>"));
+    }
+
+    #[test]
+    fn rejects_a_non_string_slot() {
+        let mut values = VarMap::new();
+        values.insert(VAR_SLOT.to_string(), serde_json::json!(42));
+
+        assert!(convert_values_into_context(values).is_err());
     }
 }
