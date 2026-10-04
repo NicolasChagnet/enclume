@@ -22,6 +22,11 @@ impl AbsPath {
         let relative = self.0.strip_prefix(base_dir)?;
         Ok(Self(out_dir.join(relative)))
     }
+
+    /// Change the extension of the underlying path
+    pub fn with_extension(self, extension: &str) -> Self {
+        Self(self.0.with_extension(extension))
+    }
 }
 
 impl TryFrom<PathBuf> for AbsPath {

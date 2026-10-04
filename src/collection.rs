@@ -3,7 +3,6 @@ use crate::{
     path::{AbsPath, COLLECTIONS_DIR, CONTENT_DIR, TEMPLATES_DIR},
     templates::{self, Template},
 };
-use log::info;
 use serde::{Deserialize, Serialize};
 use std::ffi::OsStr;
 
@@ -92,7 +91,6 @@ impl Collection {
     /// Load every collection declared in `<base_dir>/collections/`
     pub fn load_all(base_dir: &AbsPath, content_files: &[AbsPath]) -> anyhow::Result<Vec<Self>> {
         let collection_pattern = base_dir.inner().join(COLLECTIONS_DIR).join("*.toml");
-        info!("Loading all collections {}", collection_pattern.display());
         glob_files(&collection_pattern)?
             .iter()
             .map(|file| Collection::try_load_file(base_dir, file, content_files))

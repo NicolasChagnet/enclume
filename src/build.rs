@@ -9,7 +9,7 @@ use crate::{
     collection::Collection,
     content::{ContentKind, ContentSource},
     glob::glob_files,
-    parsers::HtmlParser,
+    parsers::{HtmlParser, MarkdownParser, MarkdownParserOptions},
     path::{AbsPath, CONTENT_DIR},
     templates::TeraTemplater,
 };
@@ -18,7 +18,11 @@ use crate::{
 ///
 /// Wipes `out` first, renders every collection file through its template, then
 /// copies the remaining content files as-is. Aborts on the first failure.
-pub fn build(base: AbsPath, out: AbsPath) -> anyhow::Result<()> {
+pub fn build(
+    base: AbsPath,
+    out: AbsPath,
+    markdown_options: MarkdownParserOptions,
+) -> anyhow::Result<()> {
     ensure_disjoint(&base, &out)?;
     reset_dir(&out)?;
 
@@ -30,6 +34,7 @@ pub fn build(base: AbsPath, out: AbsPath) -> anyhow::Result<()> {
     let mut templater = TeraTemplater::new();
     templater.load_templates(collections.iter().map(|c| c.template()))?;
     let html_parser = HtmlParser::new();
+    let markdown_parser = MarkdownParser::new(markdown_options);
 
     // Keep track of all files seen so the leftovers can be copied verbatim
     let mut remaining: HashSet<AbsPath> = content_files.iter().cloned().collect();
@@ -42,14 +47,19 @@ pub fn build(base: AbsPath, out: AbsPath) -> anyhow::Result<()> {
 
         collection.files().par_iter().try_for_each(|file| {
             let source_element = ContentSource::new(file.clone());
-            let parser = match source_element.kind()? {
-                ContentKind::Html => &html_parser,
-                kind => anyhow::bail!("Parsing {kind:?} files is not implemented yet ({file})"),
-            };
-            let parsed_element = source_element.parse(parser)?;
+            let parsed_element = match source_element.kind()? {
+                ContentKind::Html => source_element.parse(&html_parser),
+                ContentKind::Markdown => source_element.parse(&markdown_parser),
+                kind => Err(anyhow::anyhow!(
+                    "Parsing {kind:?} files is not implemented yet ({file})"
+                )),
+            }
+            .with_context(|| format!("Could not parse {file}"))?;
 
             let element_path = parsed_element.path().to_owned();
-            let destination_path = element_path.try_swap_base(content_dir.inner(), out.inner())?;
+            let destination_path = element_path
+                .try_swap_base(content_dir.inner(), out.inner())?
+                .with_extension("html");
 
             let rendered_content = parsed_element
                 .render(&templater, collection.template())
@@ -172,7 +182,11 @@ mod tests {
         }
 
         fn build(&self) -> anyhow::Result<()> {
-            build(self.base.clone(), self.out.clone())
+            self.build_with(MarkdownParserOptions::default())
+        }
+
+        fn build_with(&self, markdown_options: MarkdownParserOptions) -> anyhow::Result<()> {
+            build(self.base.clone(), self.out.clone(), markdown_options)
         }
     }
 
@@ -222,14 +236,58 @@ mod tests {
     #[test]
     fn fails_on_unsupported_content_kind() {
         let site = Site::new();
+        let collection =
+            "pattern = \"blog/**/*.json\"\ntemplate = \"post\"\nvariables = [\"title\"]\n";
+        site.write("templates/post.html", "{{ slot }}");
+        site.write("collections/blog.toml", collection);
+        site.write("root/blog/post.json", "{}");
+
+        let error = format!("{:#}", site.build().unwrap_err());
+
+        assert!(
+            error.contains("not implemented"),
+            "unexpected error: {error}"
+        );
+        assert!(error.contains("post.json"), "unexpected error: {error}");
+    }
+
+    #[test]
+    fn renders_markdown_collection_files() {
+        let site = Site::new();
+        site.write("templates/post.html", "<h1>{{ title }}</h1>{{ slot }}");
+        site.write("collections/blog.toml", COLLECTION);
+        site.write(
+            "root/blog/post.md",
+            "---\ntitle: Hello\n---\n# Heading\n\nSome *emphasis* inside <b>HTML</b>.\n",
+        );
+
+        site.build().unwrap();
+
+        let page = site.read("blog/post.html");
+        assert!(page.contains("<h1>Hello</h1>"));
+        assert!(page.contains("<h1 id=\"heading\">Heading</h1>"));
+        assert!(page.contains("<em>emphasis</em>"));
+        // Raw HTML written by the author passes through by default
+        assert!(page.contains("<b>HTML</b>"));
+    }
+
+    #[test]
+    fn omits_raw_html_when_build_disables_it() {
+        let site = Site::new();
         site.write("templates/post.html", "{{ slot }}");
         site.write("collections/blog.toml", COLLECTION);
-        site.write("root/blog/post.md", "---\ntitle: Hello\n---\n# body\n");
+        site.write(
+            "root/blog/post.md",
+            "---\ntitle: Hello\n---\nSome <b>HTML</b>.\n",
+        );
 
-        let error = site.build().unwrap_err().to_string();
+        site.build_with(MarkdownParserOptions::default().with_raw_html(false))
+            .unwrap();
 
-        assert!(error.contains("not implemented"));
-        assert!(error.contains("post.md"));
+        assert!(
+            site.read("blog/post.html")
+                .contains("<!-- raw HTML omitted -->")
+        );
     }
 
     #[test]
@@ -238,7 +296,9 @@ mod tests {
         let inside_base = AbsPath::try_from(site.base.inner().join("dist")).unwrap();
 
         for out in [site.base.clone(), inside_base] {
-            let error = build(site.base.clone(), out).unwrap_err().to_string();
+            let error = build(site.base.clone(), out, MarkdownParserOptions::default())
+                .unwrap_err()
+                .to_string();
             assert!(error.contains("overlaps"), "unexpected error: {error}");
         }
     }
