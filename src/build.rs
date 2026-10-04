@@ -105,6 +105,7 @@ impl SiteBuilder {
 
 impl Builder for SiteBuilder {
     fn build(&self) -> anyhow::Result<()> {
+        log::info!("Building website...");
         // Build next to `out` so the swap stays on one filesystem
         let staging = self.staging_dir();
         if let Err(error) = self.build_into(&staging) {

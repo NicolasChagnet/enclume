@@ -108,7 +108,19 @@ async fn main() -> Result<()> {
 }
 
 fn initialize_logging() -> anyhow::Result<()> {
-    env_logger::try_init()?;
+    use std::io::Write;
+    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"))
+        .format(|buf, record| {
+            writeln!(
+                buf,
+                "{}[{}]{} {}",
+                buf.default_level_style(record.level()),
+                record.level(),
+                buf.default_level_style(record.level()).render_reset(),
+                record.args()
+            )
+        })
+        .try_init()?;
     Ok(())
 }
 
