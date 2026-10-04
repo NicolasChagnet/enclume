@@ -38,6 +38,12 @@ impl TryFrom<PathBuf> for AbsPath {
     }
 }
 
+impl AsRef<std::path::Path> for AbsPath {
+    fn as_ref(&self) -> &std::path::Path {
+        &self.0
+    }
+}
+
 /// Resolve symlinks in `path`, falling back to its parent for missing targets
 ///
 /// Not-yet-created paths, such as a fresh output directory, must resolve to the

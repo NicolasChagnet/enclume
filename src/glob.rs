@@ -1,7 +1,5 @@
 use std::path::Path;
 
-use log::warn;
-
 use crate::path::AbsPath;
 
 /// Find all existing files matching a glob pattern.
@@ -20,7 +18,7 @@ pub fn glob_files(pattern: &Path) -> anyhow::Result<Vec<AbsPath>> {
             let path = match entry {
                 Ok(path) => path,
                 Err(error) => {
-                    warn!("Skipping unreadable path matching {expanded:?}: {error}");
+                    log::warn!("Skipping unreadable path matching {expanded:?}: {error}");
                     continue;
                 }
             };

@@ -2,7 +2,6 @@ use std::collections::HashSet;
 use std::path::PathBuf;
 
 use anyhow::Context;
-use log::info;
 use rayon::prelude::*;
 
 use crate::{
@@ -14,65 +13,117 @@ use crate::{
     templates::TeraTemplater,
 };
 
-/// Build the site from `base` into `out`
-///
-/// Wipes `out` first, renders every collection file through its template, then
-/// copies the remaining content files as-is. Aborts on the first failure.
-pub fn build(
+pub trait Builder {
+    /// Build the site from `base` into `out`
+    ///
+    /// Renders every collection file through its template, then copies the
+    /// remaining content files as-is. `out` is replaced only after every file
+    /// was written, so a failed build leaves the previous output untouched.
+    /// Aborts on the first failure.
+    fn build(&self) -> anyhow::Result<()>;
+}
+
+#[derive(Debug, Clone)]
+pub struct SiteBuilder {
     base: AbsPath,
     out: AbsPath,
     markdown_options: MarkdownParserOptions,
-) -> anyhow::Result<()> {
-    ensure_disjoint(&base, &out)?;
-    reset_dir(&out)?;
+}
 
-    let content_dir: AbsPath = base.inner().join(CONTENT_DIR).try_into()?;
-    let content_files = get_all_files(&base)?;
-
-    // Handle all collections
-    let collections = Collection::load_all(&base, &content_files)?;
-    let mut templater = TeraTemplater::new();
-    templater.load_templates(collections.iter().map(|c| c.template()))?;
-    let html_parser = HtmlParser::new();
-    let markdown_parser = MarkdownParser::new(markdown_options);
-
-    // Keep track of all files seen so the leftovers can be copied verbatim
-    let mut remaining: HashSet<AbsPath> = content_files.iter().cloned().collect();
-
-    for collection in &collections {
-        info!("Parsing collection {}", collection);
-        for file in collection.files() {
-            remaining.remove(file);
+impl SiteBuilder {
+    pub fn new(base: AbsPath, out: AbsPath, markdown_options: MarkdownParserOptions) -> Self {
+        Self {
+            base,
+            out,
+            markdown_options,
         }
-
-        collection.files().par_iter().try_for_each(|file| {
-            let source_element = ContentSource::new(file.clone());
-            let parsed_element = match source_element.kind()? {
-                ContentKind::Html => source_element.parse(&html_parser),
-                ContentKind::Markdown => source_element.parse(&markdown_parser),
-                ContentKind::Json => source_element.parse(&JsonParser),
-            }
-            .with_context(|| format!("Could not parse {file}"))?;
-
-            let element_path = parsed_element.path().to_owned();
-            let destination_path = element_path
-                .try_swap_base(content_dir.inner(), out.inner())?
-                .with_extension("html");
-
-            let rendered_content = parsed_element
-                .render(&templater, collection.template())
-                .with_context(|| format!("Could not render {element_path}"))?;
-
-            write_to_file(&destination_path, rendered_content.as_str())
-                .with_context(|| format!("Could not write {destination_path}"))
-        })?;
     }
 
-    // Then copy every file which remains in the source
-    remaining.par_iter().try_for_each(|file| {
-        copy_file_destination(file, &content_dir, &out)
-            .with_context(|| format!("Could not copy {file} from {content_dir} to {out}"))
-    })
+    /// Build every file into `out`
+    fn build_into(&self, out: &AbsPath) -> anyhow::Result<()> {
+        reset_dir(out)?;
+
+        let content_dir: AbsPath = self.base.inner().join(CONTENT_DIR).try_into()?;
+        let content_files = get_all_files(&self.base)?;
+
+        // Handle all collections
+        let collections = Collection::load_all(&self.base, &content_files)?;
+        let mut templater = TeraTemplater::new();
+        templater.load_templates(collections.iter().map(|c| c.template()))?;
+        let html_parser = HtmlParser::new();
+        let markdown_parser = MarkdownParser::new(self.markdown_options);
+
+        // Keep track of all files seen so the leftovers can be copied verbatim
+        let mut remaining: HashSet<AbsPath> = content_files.iter().cloned().collect();
+
+        for collection in &collections {
+            log::info!("Parsing collection {}", collection);
+            for file in collection.files() {
+                remaining.remove(file);
+            }
+
+            collection.files().par_iter().try_for_each(|file| {
+                let source_element = ContentSource::new(file.clone());
+                let parsed_element = match source_element.kind()? {
+                    ContentKind::Html => source_element.parse(&html_parser),
+                    ContentKind::Markdown => source_element.parse(&markdown_parser),
+                    ContentKind::Json => source_element.parse(&JsonParser),
+                }
+                .with_context(|| format!("Could not parse {file}"))?;
+
+                let element_path = parsed_element.path().to_owned();
+                let destination_path = element_path
+                    .try_swap_base(content_dir.inner(), out.inner())?
+                    .with_extension("html");
+
+                let rendered_content = parsed_element
+                    .render(&templater, collection.template())
+                    .with_context(|| format!("Could not render {element_path}"))?;
+
+                write_to_file(&destination_path, rendered_content.as_str())
+                    .with_context(|| format!("Could not write {destination_path}"))
+            })?;
+        }
+
+        // Then copy every file which remains in the source
+        remaining.par_iter().try_for_each(|file| {
+            copy_file_destination(file, &content_dir, out)
+                .with_context(|| format!("Could not copy {file} from {content_dir} to {out}"))
+        })
+    }
+
+    /// Sibling directory the build writes into before replacing `out`
+    fn staging_dir(&self) -> anyhow::Result<AbsPath> {
+        let mut name = self.out.inner().as_os_str().to_os_string();
+        name.push(".staging");
+        AbsPath::try_from(PathBuf::from(name))
+    }
+}
+
+impl Builder for SiteBuilder {
+    fn build(&self) -> anyhow::Result<()> {
+        ensure_disjoint(&self.base, &self.out)?;
+
+        // Build next to `out` so the swap stays on one filesystem
+        let staging = self.staging_dir()?;
+        if let Err(error) = self.build_into(&staging) {
+            let _ = std::fs::remove_dir_all(staging.inner());
+            return Err(error);
+        }
+        replace_dir(&staging, &self.out)
+    }
+}
+
+/// Replace `out` with the freshly built `staging` directory
+fn replace_dir(staging: &AbsPath, out: &AbsPath) -> anyhow::Result<()> {
+    ensure_deletable(out)?;
+    match std::fs::remove_dir_all(out.inner()) {
+        Ok(()) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => return Err(e.into()),
+    }
+    std::fs::rename(staging.inner(), out.inner())?;
+    Ok(())
 }
 
 /// Refuse overlapping source and output trees before anything is deleted
@@ -187,7 +238,7 @@ mod tests {
         }
 
         fn build_with(&self, markdown_options: MarkdownParserOptions) -> anyhow::Result<()> {
-            build(self.base.clone(), self.out.clone(), markdown_options)
+            SiteBuilder::new(self.base.clone(), self.out.clone(), markdown_options).build()
         }
     }
 
@@ -314,12 +365,31 @@ mod tests {
     }
 
     #[test]
+    fn keeps_the_previous_output_when_a_build_fails() {
+        let site = Site::new();
+        site.write("templates/post.html", "{{ slot }}");
+        site.write("collections/blog.toml", COLLECTION);
+        site.write("root/blog/post.md", "---\ntitle: Hello\n---\n# body\n");
+        site.build().unwrap();
+
+        site.write("root/blog/post.md", "---\ntitle: [unclosed\n---\n# body\n");
+
+        assert!(site.build().is_err());
+        assert!(site.read("blog/post.html").contains("<h1 id=\"body\">"));
+
+        let mut staging = site.out.inner().as_os_str().to_os_string();
+        staging.push(".staging");
+        assert!(!std::path::Path::new(&staging).exists());
+    }
+
+    #[test]
     fn fails_when_the_output_overlaps_the_base() {
         let site = Site::new();
         let inside_base = AbsPath::try_from(site.base.inner().join("dist")).unwrap();
 
         for out in [site.base.clone(), inside_base] {
-            let error = build(site.base.clone(), out, MarkdownParserOptions::default())
+            let error = SiteBuilder::new(site.base.clone(), out, MarkdownParserOptions::default())
+                .build()
                 .unwrap_err()
                 .to_string();
             assert!(error.contains("overlaps"), "unexpected error: {error}");

@@ -3,11 +3,16 @@ use std::path::PathBuf;
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 
-use crate::{parsers::MarkdownParserOptions, path::AbsPath};
+use crate::{
+    build::{Builder, SiteBuilder},
+    parsers::MarkdownParserOptions,
+    path::AbsPath,
+};
 
 mod build;
 mod collection;
 mod content;
+mod dev;
 mod glob;
 mod parsers;
 mod path;
@@ -23,6 +28,14 @@ struct Args {
 #[derive(Debug, Clone, Subcommand)]
 enum Command {
     Build {
+        #[arg(short, long, default_value = "src")]
+        base: PathBuf,
+        #[arg(short, long, default_value = "dist")]
+        out: PathBuf,
+        #[command(flatten)]
+        markdown_args: MarkdownParserCliOptions,
+    },
+    Dev {
         #[arg(short, long, default_value = "src")]
         base: PathBuf,
         #[arg(short, long, default_value = "dist")]
@@ -66,7 +79,8 @@ impl From<MarkdownParserCliOptions> for MarkdownParserOptions {
     }
 }
 
-fn main() -> Result<()> {
+#[tokio::main]
+async fn main() -> Result<()> {
     initialize_logging()?;
 
     let args = Args::parse();
@@ -76,10 +90,18 @@ fn main() -> Result<()> {
             out,
             markdown_args,
         } => {
+            let builder = SiteBuilder::new(base.try_into()?, out.try_into()?, markdown_args.into());
+            builder.build()?;
+        }
+        Command::Dev {
+            base,
+            out,
+            markdown_args,
+        } => {
             let base: AbsPath = base.try_into()?;
             let out: AbsPath = out.try_into()?;
-
-            build::build(base, out, markdown_args.into())?;
+            let builder = SiteBuilder::new(base.clone(), out.clone(), markdown_args.into());
+            dev::serve_and_watch(base, out, builder).await?;
         }
     }
     Ok(())
