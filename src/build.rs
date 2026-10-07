@@ -1,16 +1,12 @@
-use std::{
-    collections::HashSet,
-    path::{Path, PathBuf},
-};
+use std::path::{Path, PathBuf};
 
 use anyhow::Context;
 use rayon::prelude::*;
 
 use crate::{
-    collection::Collection,
     content::{ContentKind, ContentSource},
     glob::glob_files,
-    parsers::{HtmlParser, JsonParser, MarkdownParser, MarkdownParserOptions},
+    parsers::{JsonParser, MarkdownParser, MarkdownParserOptions},
     path::{Roots, SitePath},
     templates::TeraTemplater,
 };
@@ -18,10 +14,10 @@ use crate::{
 pub trait Builder {
     /// Build the site from `base` into `out`
     ///
-    /// Renders every collection file through its template, then copies the
-    /// remaining content files as-is. `out` is replaced only after every file
-    /// was written, so a failed build leaves the previous output untouched.
-    /// Aborts on the first failure.
+    /// Renders every file which declares metadata in its frontmatter through
+    /// the template it names, and copies the files without frontmatter as-is.
+    /// `out` is replaced only after every file was written, so a failed build
+    /// leaves the previous output untouched. Aborts on the first failure.
     fn build(&self) -> anyhow::Result<()>;
 }
 
@@ -46,53 +42,39 @@ impl SiteBuilder {
         let content_dir = self.roots.content_dir();
         let content_files = get_all_files(&content_dir)?;
 
-        // Handle all collections
-        let collections = Collection::load_all(&self.roots, &content_files)?;
         let mut templater = TeraTemplater::new();
         templater.load_templates(&self.roots.templates_dir())?;
-        let html_parser = HtmlParser::new();
         let markdown_parser = MarkdownParser::new(self.markdown_options);
 
-        // Keep track of all files seen so the leftovers can be copied verbatim
-        let mut remaining: HashSet<SitePath> = content_files.into_iter().collect();
+        content_files.into_par_iter().try_for_each(|file| {
+            log::debug!("Handling {file}");
 
-        for collection in &collections {
-            log::info!("Parsing collection {collection}");
-            for file in collection.files() {
-                remaining.remove(file);
-            }
-
-            collection.files().par_iter().try_for_each(|file| {
-                let source = ContentSource::new(&content_dir, file.clone());
-                let parsed_element = match source.kind()? {
-                    ContentKind::Html => source.parse(&html_parser),
+            let destination = out.join(file.as_path());
+            let source = ContentSource::new(&content_dir, file.clone());
+            let parsed = match source.kind() {
+                // Content files name their rendering template in their metadata
+                Ok(kind) => match kind {
                     ContentKind::Markdown => source.parse(&markdown_parser),
                     ContentKind::Json => source.parse(&JsonParser),
                 }
-                .with_context(|| format!("Could not parse {file}"))?;
+                .with_context(|| format!("Could not parse {file}"))?,
+                // Files without a known content kind have no metadata either
+                Err(_) => None,
+            };
 
-                let destination_file = parsed_element.path().clone().with_extension("html");
-                let destination_path = out.join(destination_file.as_path());
+            // Files which declare no metadata are copied verbatim
+            let Some(parsed) = parsed else {
+                return copy_file_destination(&content_dir.join(file.as_path()), &destination)
+                    .with_context(|| format!("Could not copy {file} into {}", out.display()));
+            };
 
-                let rendered_content = parsed_element
-                    .render(&templater, collection.template())
-                    .with_context(|| format!("Could not render {file}"))?;
-
-                write_to_file(&destination_path, rendered_content.as_str())
-                    .with_context(|| format!("Could not write {destination_file}"))
-            })?;
-        }
-
-        // Then copy every file which remains in the source
-        remaining.par_iter().try_for_each(|file| {
-            copy_file_destination(file, &content_dir, out).with_context(|| {
-                format!(
-                    "Could not copy {file} from {} to {}",
-                    content_dir.display(),
-                    out.display()
-                )
-            })
-        })
+            let content = parsed
+                .render(&templater)
+                .with_context(|| format!("Could not render {file}"))?;
+            write_to_file(&destination.with_extension("html"), content.as_str())
+                .with_context(|| format!("Could not write {file}"))
+        })?;
+        Ok(())
     }
 
     /// Sibling directory the build writes into before replacing `out`
@@ -165,16 +147,11 @@ fn write_to_file(path: &Path, content: &str) -> anyhow::Result<()> {
 }
 
 /// Copy a file to the destination folder as-is
-fn copy_file_destination(
-    file: &SitePath,
-    content_dir: &Path,
-    out_dir: &Path,
-) -> anyhow::Result<()> {
-    let destination_path = out_dir.join(file.as_path());
+fn copy_file_destination(origin_path: &Path, destination_path: &Path) -> anyhow::Result<()> {
     if let Some(parent) = destination_path.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    std::fs::copy(content_dir.join(file.as_path()), destination_path)?;
+    std::fs::copy(origin_path, destination_path)?;
     Ok(())
 }
 
@@ -202,12 +179,6 @@ fn get_all_files(content_dir: &Path) -> anyhow::Result<Vec<SitePath>> {
 mod tests {
     use super::*;
     use std::fs;
-
-    const COLLECTION: &str =
-        "pattern = \"blog/**/*.{md,html}\"\ntemplate = \"post.html\"\nvariables = [\"title\"]\n";
-
-    const JSON_COLLECTION: &str =
-        "pattern = \"blog/**/*.json\"\ntemplate = \"post.html\"\nvariables = [\"title\"]\n";
 
     struct Site {
         // Held to remove the temporary directory once the test ends
@@ -247,16 +218,15 @@ mod tests {
     }
 
     #[test]
-    fn renders_collection_files_and_copies_other_content() {
+    fn renders_content_files_and_copies_other_files() {
         let site = Site::new();
         site.write(
             "templates/post.html",
-            "<h1>{{ title | default(value=\"\") }}</h1>{{ slot }}",
+            "<h1>{{ title | default(value=\"\") }}</h1>{{__content__}}",
         );
-        site.write("collections/blog.toml", COLLECTION);
         site.write(
-            "root/blog/post.html",
-            "---\ntitle: Hello <b>world</b>\n---\n<p>body</p>\n",
+            "root/blog/post.md",
+            "---\ntitle: Hello <b>world</b>\ntemplate: post.html\n---\nbody\n",
         );
         site.write("root/blog/other.html", "<p>no frontmatter</p>\n");
         site.write("root/assets/style.css", "body {}\n");
@@ -273,15 +243,18 @@ mod tests {
         );
         assert_eq!(site.read("assets/style.css"), "body {}\n");
         assert!(!site.exists("root"));
+        assert!(!site.exists("blog/post.md"));
     }
 
     #[test]
-    fn loads_templates_no_collection_references() {
+    fn renders_templates_which_include_other_templates() {
         let site = Site::new();
-        site.write("templates/layout.html", "<main>{{ slot }}</main>");
+        site.write("templates/layout.html", "<main>{{__content__}}</main>");
         site.write("templates/post.html", "{% include \"layout.html\" %}");
-        site.write("collections/blog.toml", COLLECTION);
-        site.write("root/blog/post.md", "---\ntitle: Hello\n---\n# body\n");
+        site.write(
+            "root/blog/post.md",
+            "---\ntitle: Hello\ntemplate: post.html\n---\n# body\n",
+        );
 
         site.build().unwrap();
 
@@ -291,31 +264,16 @@ mod tests {
     }
 
     #[test]
-    fn fails_on_invalid_collection_file() {
-        let site = Site::new();
-        site.write(
-            "collections/blog.toml",
-            "pattern = \"blog/**/*.html\"\ntemplate = \"post.html\"\n",
-        );
-
-        let error = format!("{:#}", site.build().unwrap_err());
-
-        assert!(error.contains("blog.toml"));
-        assert!(error.contains("variables"));
-    }
-
-    #[test]
-    fn renders_json_collection_files() {
+    fn renders_json_content_files() {
         let site = Site::new();
         site.write(
             "templates/post.html",
-            "<h1>{{ title }}</h1><span>{{ views }}</span><slot>{{ slot }}</slot>\
-             {% for item in content.items %}<i>{{ item }}</i>{% endfor %}",
+            "<h1>{{ title }}</h1><span>{{ views }}</span>\
+             {% for item in __content__.items %}<i>{{ item }}</i>{% endfor %}",
         );
-        site.write("collections/blog.toml", JSON_COLLECTION);
         site.write(
             "root/blog/post.json",
-            r#"{"metadata": {"title": "Hello", "views": 42}, "content": {"items": ["a", "b"]}}"#,
+            "---\ntemplate: post.html\ntitle: Hello\nviews: 42\n---\n{\"items\": [\"a\", \"b\"]}",
         );
 
         site.build().unwrap();
@@ -323,17 +281,38 @@ mod tests {
         let page = site.read("blog/post.html");
         assert!(page.contains("<h1>Hello</h1>"));
         assert!(page.contains("<span>42</span>"));
-        // JSON files have no body, so the slot is present but empty
-        assert!(page.contains("<slot></slot>"));
         assert!(page.contains("<i>a</i><i>b</i>"));
+    }
+
+    #[test]
+    fn copies_a_content_file_without_frontmatter() {
+        let site = Site::new();
+        site.write("root/blog/notes.md", "# Just content\n");
+        site.write("root/blog/data.json", r#"{"items": ["a"]}"#);
+
+        site.build().unwrap();
+
+        assert_eq!(site.read("blog/notes.md"), "# Just content\n");
+        assert_eq!(site.read("blog/data.json"), r#"{"items": ["a"]}"#);
+        assert!(!site.exists("blog/notes.html"));
+    }
+
+    #[test]
+    fn fails_on_a_content_file_without_a_template() {
+        let site = Site::new();
+        site.write("root/blog/post.md", "---\ntitle: Hello\n---\n# body\n");
+
+        let error = format!("{:#}", site.build().unwrap_err());
+
+        assert!(error.contains("post.md"), "unexpected error: {error}");
+        assert!(error.contains("template"), "unexpected error: {error}");
     }
 
     #[test]
     fn fails_on_invalid_json_content() {
         let site = Site::new();
-        site.write("templates/post.html", "{{ slot }}");
-        site.write("collections/blog.toml", JSON_COLLECTION);
-        site.write("root/blog/post.json", "{");
+        site.write("templates/post.html", "{{__content__}}");
+        site.write("root/blog/post.json", "---\ntemplate: post.html\n---\n{");
 
         let error = format!("{:#}", site.build().unwrap_err());
 
@@ -345,13 +324,12 @@ mod tests {
     }
 
     #[test]
-    fn renders_markdown_collection_files() {
+    fn renders_markdown_content_files() {
         let site = Site::new();
-        site.write("templates/post.html", "<h1>{{ title }}</h1>{{ slot }}");
-        site.write("collections/blog.toml", COLLECTION);
+        site.write("templates/post.html", "<h1>{{ title }}</h1>{{__content__}}");
         site.write(
             "root/blog/post.md",
-            "---\ntitle: Hello\n---\n# Heading\n\nSome *emphasis* inside <b>HTML</b>.\n",
+            "---\ntitle: Hello\ntemplate: post.html\n---\n# Heading\n\nSome *emphasis* inside <b>HTML</b>.\n",
         );
 
         site.build().unwrap();
@@ -367,11 +345,10 @@ mod tests {
     #[test]
     fn omits_raw_html_when_build_disables_it() {
         let site = Site::new();
-        site.write("templates/post.html", "{{ slot }}");
-        site.write("collections/blog.toml", COLLECTION);
+        site.write("templates/post.html", "{{__content__}}");
         site.write(
             "root/blog/post.md",
-            "---\ntitle: Hello\n---\nSome <b>HTML</b>.\n",
+            "---\ntitle: Hello\ntemplate: post.html\n---\nSome <b>HTML</b>.\n",
         );
 
         site.build_with(MarkdownParserOptions::default().with_raw_html(false))
@@ -386,12 +363,17 @@ mod tests {
     #[test]
     fn keeps_the_previous_output_when_a_build_fails() {
         let site = Site::new();
-        site.write("templates/post.html", "{{ slot }}");
-        site.write("collections/blog.toml", COLLECTION);
-        site.write("root/blog/post.md", "---\ntitle: Hello\n---\n# body\n");
+        site.write("templates/post.html", "{{__content__}}");
+        site.write(
+            "root/blog/post.md",
+            "---\ntitle: Hello\ntemplate: post.html\n---\n# body\n",
+        );
         site.build().unwrap();
 
-        site.write("root/blog/post.md", "---\ntitle: [unclosed\n---\n# body\n");
+        site.write(
+            "root/blog/post.md",
+            "---\ntitle: [unclosed\ntemplate: post.html\n---\n# body\n",
+        );
 
         assert!(site.build().is_err());
         assert!(site.read("blog/post.html").contains("<h1 id=\"body\">"));

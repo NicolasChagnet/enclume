@@ -2,12 +2,13 @@ use std::path::Path;
 
 use anyhow::Context;
 
-use crate::parsers::{RawHtml, VarMap};
-
-pub const VAR_SLOT: &str = "slot";
+use crate::{
+    parsers::{RawHtml, VAR_CONTENT, VarMap},
+    path::SitePath,
+};
 
 pub trait Templater {
-    fn render(&self, template_name: &str, values: VarMap) -> anyhow::Result<RawHtml>;
+    fn render(&self, template: &SitePath, values: VarMap) -> anyhow::Result<RawHtml>;
 }
 
 #[derive(Debug, Clone)]
@@ -49,9 +50,9 @@ impl TeraTemplater {
 }
 
 impl Templater for TeraTemplater {
-    fn render(&self, template_name: &str, values: VarMap) -> anyhow::Result<RawHtml> {
+    fn render(&self, template: &SitePath, values: VarMap) -> anyhow::Result<RawHtml> {
         let context = convert_values_into_context(values)?;
-        let rendered = self.engine.render(template_name, &context)?;
+        let rendered = self.engine.render(&template.to_string(), &context)?;
         Ok(RawHtml::new(rendered))
     }
 }
@@ -59,21 +60,17 @@ impl Templater for TeraTemplater {
 /// Convert the variable map into a Tera context
 ///
 /// Values keep their JSON type so templates can read structured content. The
-/// slot holds an HTML fragment parsed from the content file, so it bypasses
-/// the escaping applied to every other variable.
+/// content of a Markdown file is an HTML fragment, so it bypasses the escaping
+/// applied to every other string.
 fn convert_values_into_context(values: VarMap) -> anyhow::Result<tera::Context> {
     let mut context = tera::Context::new();
     for (key, value) in values {
-        if key == VAR_SLOT {
-            let html = value
-                .as_str()
-                .with_context(|| format!("{VAR_SLOT} must be a string"))?;
-            context.insert_value(key, tera::Value::safe_string(html));
-        } else {
-            let value = tera::Value::try_from_serializable(&value)
-                .with_context(|| format!("Could not convert variable {key:?} for the template"))?;
-            context.insert_value(key, value);
-        }
+        let value = match (key.as_str(), value) {
+            (VAR_CONTENT, serde_json::Value::String(html)) => tera::Value::safe_string(&html),
+            (_, value) => tera::Value::try_from_serializable(&value)
+                .with_context(|| format!("Could not convert variable {key:?} for the template"))?,
+        };
+        context.insert_value(key, value);
     }
     Ok(context)
 }
@@ -87,22 +84,24 @@ mod tests {
         let mut values = VarMap::new();
         values.insert("views".to_string(), serde_json::json!(42));
         values.insert("tags".to_string(), serde_json::json!(["a", "b"]));
-        values.insert(VAR_SLOT.to_string(), serde_json::json!("<p>body</p>"));
+        values.insert(VAR_CONTENT.to_string(), serde_json::json!({"items": ["a"]}));
 
         let context = convert_values_into_context(values).unwrap();
 
         assert!(context.get("views").unwrap().is_number());
         assert!(context.get("tags").unwrap().is_array());
-        let slot = context.get(VAR_SLOT).unwrap();
-        assert!(slot.is_safe());
-        assert_eq!(slot.as_str(), Some("<p>body</p>"));
+        assert!(context.get(VAR_CONTENT).unwrap().is_map());
     }
 
     #[test]
-    fn rejects_a_non_string_slot() {
+    fn marks_parsed_markdown_as_safe_html() {
         let mut values = VarMap::new();
-        values.insert(VAR_SLOT.to_string(), serde_json::json!(42));
+        values.insert(VAR_CONTENT.to_string(), serde_json::json!("<p>body</p>"));
 
-        assert!(convert_values_into_context(values).is_err());
+        let context = convert_values_into_context(values).unwrap();
+
+        let content = context.get(VAR_CONTENT).unwrap();
+        assert!(content.is_safe());
+        assert_eq!(content.as_str(), Some("<p>body</p>"));
     }
 }

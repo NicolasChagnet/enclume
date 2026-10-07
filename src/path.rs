@@ -86,6 +86,10 @@ fn resolve_existing_prefix(path: &Path) -> PathBuf {
 pub struct SitePath(PathBuf);
 
 impl SitePath {
+    pub fn new(path: PathBuf) -> Self {
+        Self(path)
+    }
+
     pub fn as_path(&self) -> &Path {
         &self.0
     }

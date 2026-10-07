@@ -10,7 +10,6 @@ use crate::{
 };
 
 mod build;
-mod collection;
 mod content;
 mod dev;
 mod glob;
@@ -127,7 +126,7 @@ fn initialize_logging() -> anyhow::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::parsers::{ContentParser, MarkdownParser};
+    use crate::parsers::{ContentParser, MarkdownParser, VAR_CONTENT};
 
     #[test]
     fn cli_flags_map_to_markdown_options() {
@@ -149,9 +148,15 @@ mod tests {
             ..Default::default()
         }
         .into();
-        let (_, body) = MarkdownParser::new(options)
-            .parse("Hello :smile:\n")
+        let metadata = MarkdownParser::new(options)
+            .parse("---\ntemplate: post.html\n---\nHello :smile:\n")
+            .unwrap()
+            .expect("expected frontmatter");
+        let content = metadata
+            .variables()
+            .get(VAR_CONTENT)
+            .and_then(|content| content.as_str())
             .unwrap();
-        assert!(body.inner().contains(":smile:"));
+        assert!(content.contains(":smile:"));
     }
 }

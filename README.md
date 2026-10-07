@@ -21,8 +21,6 @@ src/
   templates/
     layout.html
     post.html
-  collections/
-    blog.toml
   root/
     index.html
     style.css
@@ -31,35 +29,49 @@ src/
       other_post.html
 ```
 
-The collection configurations defines the expected behavior of the collection. For example, the following configuration
-```toml
-# blog.toml
-
-# Relative to root/
-pattern = "blog/**/*.{md,html}"
-template = "post.html"
-
-# Variables expected in the frontmatter of each file
-variables = ["title", "description", "published_on", "last_updated_on", "tag"]
+To generate the output static website, you can use
+```sh
+enclume --base src --out dist
 ```
-will tell the engine to look for any nested markdown or HTML file in the `root/blog/` folder and parse them, expecting various variables to inject in the `post.html` template.
 
-A few idiosyncracies to keep in mind:
-- `layout.html` is a special template name: any content file under `root/` which isn't part of a declared collection will automatically be inserted inside it, _unless_ that file has an `<html>` tag within.
-- Paths follow the `root/` structure.
-- The parsed content is injected as `slot`. It is an HTML fragment, so it is inserted as-is, without any escaping or `| safe` filter.
-- The other variables are HTML-escaped when injected. Only the variables present in a file's frontmatter reach its template: reading a variable a file does not define aborts the build, so use tera's `default` filter for optional variables: `{{ last_updated_on | default(value="") }}`.
-- Content can be one of the following formats:
-  - markdown: metadata is given via a yaml frontmatter
-  - html: metadata provided via a yaml frontmatter (stripped during building)
-  - json: each file should have the following structure
-```json
-{
-  "metadata" {
-    ...
-  },
-  "content": {
-    ...
-  }
-}
+Content in `root/` is either parsed by one of the available parsers or copied as-is to the `dist/` directory. There are currently two parsers available: Markdown and Json.
+All metadata is provided as yaml frontmatter, for example
+
+```markdown
+---
+template: "post.html"
+title: "This is a blog post"
+---
+Some content
 ```
+
+The `template` key is **reserved** and should refer to the template used. Templates are built using the [Tera template engine](https://keats.github.io/tera/). For example, this could be the layout
+```html
+<!-- layout.html -->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    {% block head %}
+    <link rel="stylesheet" href="style.css" />
+    <title>{% block title %}{% endblock title %} - My Webpage</title>
+    {% endblock head %}
+</head>
+<body>
+    <div id="content">{% block content %}{% endblock content %}</div>
+</body>
+</html>
+```
+and the blog post template
+
+```html
+<!-- post.html -->
+{% extends "base.html" %}
+
+{% block title %}{{title}}{% endblock title %}
+
+{% block content %}
+  {{__content__}}
+{% endblock content %}
+```
+
+The `__content__` is a reserved templating variable for the parsed Markdown HTML.

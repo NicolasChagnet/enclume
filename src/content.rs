@@ -1,15 +1,14 @@
 use std::path::Path;
 
 use crate::{
-    parsers::{ContentParser, ParsedMetadata, RawHtml, Var, VarMap},
+    parsers::{ContentParser, ParsedMetadata, RawHtml},
     path::SitePath,
-    templates::{Templater, VAR_SLOT},
+    templates::Templater,
 };
 
 #[derive(Debug, Clone, Copy)]
 pub enum ContentKind {
     Markdown,
-    Html,
     Json,
 }
 
@@ -17,7 +16,6 @@ impl ContentKind {
     pub fn try_from_extension(extension: &str) -> anyhow::Result<Self> {
         let val = match extension {
             "md" => Self::Markdown,
-            "html" => Self::Html,
             "json" => Self::Json,
             _ => anyhow::bail!("Extension {:?} could not be parsed!", extension),
         };
@@ -46,10 +44,16 @@ impl<'a> ContentSource<'a> {
         ContentKind::try_from_extension(extension)
     }
 
-    pub fn parse<P: ContentParser>(self, parser: &P) -> anyhow::Result<ContentParsed> {
+    /// Parse the file into an element
+    ///
+    /// `None` marks a file which declares no metadata, and which the build
+    /// copies verbatim instead of rendering.
+    pub fn parse<P: ContentParser>(self, parser: &P) -> anyhow::Result<Option<ContentParsed>> {
         let content = std::fs::read_to_string(self.content_dir.join(self.file.as_path()))?;
-        let (metadata, body) = parser.parse(&content)?;
-        Ok(ContentParsed::new(self.file, metadata, body))
+        let Some(metadata) = parser.parse(&content)? else {
+            return Ok(None);
+        };
+        Ok(Some(ContentParsed::new(self.file, metadata)))
     }
 }
 
@@ -57,15 +61,13 @@ impl<'a> ContentSource<'a> {
 pub struct ContentParsed {
     original_file_path: SitePath,
     metadata: ParsedMetadata,
-    content: RawHtml,
 }
 
 impl ContentParsed {
-    pub fn new(original_file_path: SitePath, metadata: ParsedMetadata, content: RawHtml) -> Self {
+    pub fn new(original_file_path: SitePath, metadata: ParsedMetadata) -> Self {
         Self {
             original_file_path,
             metadata,
-            content,
         }
     }
 
@@ -77,30 +79,10 @@ impl ContentParsed {
         &self.metadata
     }
 
-    pub fn content(&self) -> &RawHtml {
-        &self.content
-    }
-
     /// Flatten the element into the variable map handed to templates
-    ///
-    /// Errors when the frontmatter already declares the content slot variable,
-    /// which would otherwise be overwritten without notice.
-    pub fn into_map(self) -> anyhow::Result<VarMap> {
-        let mut map = self.metadata.into_inner();
-        if map.contains_key(VAR_SLOT) {
-            anyhow::bail!("Frontmatter variable {VAR_SLOT:?} collides with the content slot");
-        }
-        map.insert(VAR_SLOT.to_string(), Var::String(self.content.into_inner()));
-        Ok(map)
-    }
-
-    pub fn render<T: Templater>(
-        self,
-        templater: &T,
-        template: &str,
-    ) -> anyhow::Result<RenderedContent> {
-        let values = self.into_map()?;
-        let rendered_content = templater.render(template, values)?;
+    pub fn render<T: Templater>(self, templater: &T) -> anyhow::Result<RenderedContent> {
+        let (template, values) = self.metadata.into_attrs();
+        let rendered_content = templater.render(&template, values)?;
         Ok(RenderedContent::new(rendered_content))
     }
 }
@@ -124,25 +106,13 @@ impl RenderedContent {
 
 #[cfg(test)]
 mod tests {
+    use crate::parsers::{MarkdownParser, VAR_CONTENT};
+
     use super::*;
-    use crate::parsers::HtmlParser;
     use std::path::PathBuf;
 
     fn site_path(path: &str) -> SitePath {
         SitePath::try_from(PathBuf::from(path)).unwrap()
-    }
-
-    fn element(metadata: &[(&str, &str)]) -> ContentParsed {
-        ContentParsed::new(
-            site_path("blog/post.html"),
-            ParsedMetadata::new(
-                metadata
-                    .iter()
-                    .map(|(key, value)| (key.to_string(), serde_json::json!(value)))
-                    .collect(),
-            ),
-            RawHtml::new("<p>body</p>".to_string()),
-        )
     }
 
     #[test]
@@ -156,10 +126,10 @@ mod tests {
             ContentKind::Markdown
         ));
         assert!(matches!(
-            ContentSource::new(content_dir, site_path("blog/post.html"))
+            ContentSource::new(content_dir, site_path("blog/post.json"))
                 .kind()
                 .unwrap(),
-            ContentKind::Html
+            ContentKind::Json
         ));
         assert!(
             ContentSource::new(content_dir, site_path("assets/style.css"))
@@ -169,34 +139,40 @@ mod tests {
     }
 
     #[test]
-    fn parses_a_source_file_into_path_metadata_and_body() {
+    fn parses_a_source_file_into_path_and_metadata() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(
-            dir.path().join("post.html"),
-            "---\ntitle: hi\n---\n<p>body</p>",
+            dir.path().join("post.md"),
+            "---\ntitle: hi\ntemplate: post.html\n---\nbody",
         )
         .unwrap();
-        let source = ContentSource::new(dir.path(), site_path("post.html"));
+        let source = ContentSource::new(dir.path(), site_path("post.md"));
 
-        let parsed = source.parse(&HtmlParser::new()).unwrap();
+        let parsed = source.parse(&MarkdownParser::default()).unwrap().unwrap();
 
         assert_eq!(
-            parsed.metadata().inner().get("title"),
+            parsed.metadata().variables().get("title"),
             Some(&serde_json::json!("hi"))
         );
-        assert_eq!(parsed.content().inner(), "<p>body</p>");
-        assert_eq!(parsed.path().as_path(), Path::new("post.html"));
+        assert_eq!(
+            parsed.metadata().variables().get(VAR_CONTENT),
+            Some(&serde_json::json!("<p>body</p>\n"))
+        );
+        assert_eq!(
+            parsed.metadata().template().as_path(),
+            Path::new("post.html")
+        );
+        assert_eq!(parsed.path().as_path(), Path::new("post.md"));
     }
 
     #[test]
-    fn adds_the_content_slot_to_the_variable_map() {
-        let map = element(&[("title", "hi")]).into_map().unwrap();
-        assert_eq!(map.get("title"), Some(&serde_json::json!("hi")));
-        assert_eq!(map.get(VAR_SLOT), Some(&serde_json::json!("<p>body</p>")));
-    }
+    fn skips_a_source_file_without_frontmatter() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("post.md"), "# Just content\n").unwrap();
+        let source = ContentSource::new(dir.path(), site_path("post.md"));
 
-    #[test]
-    fn rejects_a_frontmatter_collision_with_the_slot() {
-        assert!(element(&[(VAR_SLOT, "hijacked")]).into_map().is_err());
+        let parsed = source.parse(&MarkdownParser::default()).unwrap();
+
+        assert!(parsed.is_none());
     }
 }

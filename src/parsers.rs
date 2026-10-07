@@ -1,6 +1,12 @@
+use std::path::PathBuf;
+
+use crate::path::SitePath;
 use anyhow::Context;
 use rushdown::{parser::ParserExtension, renderer::html::RendererExtension};
-use serde::Deserialize;
+
+// Reserved variables
+pub const VAR_TEMPLATE: &str = "template";
+pub const VAR_CONTENT: &str = "__content__";
 
 pub type Var = serde_json::Value;
 pub type VarMap = std::collections::HashMap<String, Var>;
@@ -27,43 +33,38 @@ impl RawHtml {
 }
 
 #[derive(Debug, Clone)]
-pub struct ParsedMetadata(VarMap);
+pub struct ParsedMetadata {
+    template: SitePath,
+    variables: VarMap,
+}
 
 impl ParsedMetadata {
-    pub fn new(value: VarMap) -> Self {
-        Self(value)
+    pub fn new(template: SitePath, variables: VarMap) -> Self {
+        Self {
+            template,
+            variables,
+        }
     }
 
-    pub fn inner(&self) -> &VarMap {
-        &self.0
+    pub fn template(&self) -> &SitePath {
+        &self.template
     }
 
-    pub fn into_inner(self) -> VarMap {
-        self.0
+    pub fn variables(&self) -> &VarMap {
+        &self.variables
+    }
+
+    pub fn into_attrs(self) -> (SitePath, VarMap) {
+        (self.template, self.variables)
     }
 }
 
 pub trait ContentParser {
-    /// Parse a string into metadata and a body
-    fn parse(&self, content: &str) -> anyhow::Result<(ParsedMetadata, RawHtml)>;
-}
-
-#[derive(Debug, Clone)]
-pub struct HtmlParser;
-
-impl HtmlParser {
-    pub fn new() -> Self {
-        Self
-    }
-}
-
-impl ContentParser for HtmlParser {
-    fn parse(&self, content: &str) -> anyhow::Result<(ParsedMetadata, RawHtml)> {
-        let (frontmatter, body) = split_yaml_frontmatter(content);
-        let var_map = parse_yaml_frontmatter(frontmatter)?;
-
-        Ok((ParsedMetadata::new(var_map), RawHtml::new(body.to_string())))
-    }
+    /// Parse a string into metadata
+    ///
+    /// Returns `None` when the content declares no frontmatter, which marks the
+    /// file for a verbatim copy instead of a rendering pass.
+    fn parse(&self, content: &str) -> anyhow::Result<Option<ParsedMetadata>>;
 }
 
 /// Feature switches for the Markdown parser and HTML renderer
@@ -217,7 +218,9 @@ impl MarkdownParserOptions {
 }
 
 /// Markdown content parser backed by rushdown
-#[derive(Clone, Debug)]
+///
+/// Inserts the rendered markdown inside the [`VAR_CONTENT`] variable of the templating variables.
+#[derive(Clone, Debug, Default)]
 pub struct MarkdownParser {
     options: MarkdownParserOptions,
 }
@@ -229,9 +232,13 @@ impl MarkdownParser {
 }
 
 impl ContentParser for MarkdownParser {
-    fn parse(&self, content: &str) -> anyhow::Result<(ParsedMetadata, RawHtml)> {
+    fn parse(&self, content: &str) -> anyhow::Result<Option<ParsedMetadata>> {
         let (frontmatter, body) = split_yaml_frontmatter(content);
-        let var_map = parse_yaml_frontmatter(frontmatter)?;
+        if frontmatter.trim().is_empty() {
+            return Ok(None);
+        }
+        let mut var_map = parse_yaml_frontmatter(frontmatter)?;
+        let template = pop_template_from_metadata(&mut var_map)?;
 
         let parser = rushdown::new_markdown_to_html(
             self.options.parser_options(),
@@ -245,7 +252,28 @@ impl ContentParser for MarkdownParser {
             // rushdown::Error is not Send, so anyhow cannot keep it as a source
             anyhow::bail!("Could not parse Markdown content: {e}")
         }
-        Ok((ParsedMetadata::new(var_map), RawHtml::new(parsed_body)))
+        var_map.insert(VAR_CONTENT.to_string(), parsed_body.into());
+        Ok(Some(ParsedMetadata::new(template, var_map)))
+    }
+}
+
+/// JSON content parser
+///
+/// Inserts the JSON object inside the [`VAR_CONTENT`] key of the templating variables.
+pub struct JsonParser;
+
+impl ContentParser for JsonParser {
+    fn parse(&self, content: &str) -> anyhow::Result<Option<ParsedMetadata>> {
+        let (frontmatter, body) = split_yaml_frontmatter(content);
+        if frontmatter.trim().is_empty() {
+            return Ok(None);
+        }
+        let mut var_map = parse_yaml_frontmatter(frontmatter)?;
+        let template = pop_template_from_metadata(&mut var_map)?;
+
+        let parsed_json = serde_json::from_str(body).context("Could not parse JSON content")?;
+        var_map.insert(VAR_CONTENT.to_string(), parsed_json);
+        Ok(Some(ParsedMetadata::new(template, var_map)))
     }
 }
 
@@ -271,43 +299,35 @@ fn parse_yaml_frontmatter(frontmatter: &str) -> anyhow::Result<VarMap> {
     Ok(map)
 }
 
-/// Shape of a JSON content file
+/// Take the template name out of the metadata
 ///
-/// The `metadata` field feeds the template variables, while `content` holds
-/// arbitrary JSON exposed to templates as the [`VAR_CONTENT`] variable. JSON
-/// files have no body, so the content slot stays empty.
-#[derive(Debug, Clone, Deserialize)]
-struct JsonContentFormat {
-    metadata: Option<VarMap>,
-    content: Option<Var>,
-}
-
-/// Variable holding the `content` field of a JSON content file
-pub const VAR_CONTENT: &str = "content";
-
-/// JSON content parser
-///
-/// Reserved variables: [`VAR_CONTENT`] holds the top-level `content` field,
-/// and `slot` is injected empty by the build pipeline because JSON files have
-/// no body. Metadata keys that shadow a reserved variable are overwritten
-/// without notice.
-pub struct JsonParser;
-
-impl ContentParser for JsonParser {
-    fn parse(&self, content: &str) -> anyhow::Result<(ParsedMetadata, RawHtml)> {
-        let parsed_json: JsonContentFormat =
-            serde_json::from_str(content).context("Could not parse JSON content")?;
-        let mut metadata = parsed_json.metadata.unwrap_or_default();
-        if let Some(content) = parsed_json.content {
-            metadata.insert(VAR_CONTENT.to_string(), content);
-        }
-        Ok((ParsedMetadata::new(metadata), RawHtml::empty()))
-    }
+/// Every content file must name the template that renders it, so the variable
+/// is consumed here instead of reaching the template context.
+fn pop_template_from_metadata(metadata: &mut VarMap) -> anyhow::Result<SitePath> {
+    let template = metadata
+        .remove(VAR_TEMPLATE)
+        .and_then(|value| value.as_str().map(PathBuf::from))
+        .with_context(|| format!("No {VAR_TEMPLATE:?} variable in the content metadata"))?;
+    Ok(SitePath::new(template))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Rendered body of a Markdown string which declares a template
+    fn rendered_markdown(parser: &MarkdownParser, markdown: &str) -> String {
+        let metadata = parser
+            .parse(markdown)
+            .unwrap()
+            .expect("expected frontmatter");
+        metadata
+            .variables()
+            .get(VAR_CONTENT)
+            .and_then(|content| content.as_str())
+            .expect("expected rendered Markdown HTML")
+            .to_string()
+    }
 
     #[test]
     fn splits_frontmatter_from_body() {
@@ -324,6 +344,13 @@ mod tests {
     }
 
     #[test]
+    fn skips_markdown_without_frontmatter() {
+        let parsed = MarkdownParser::default().parse("# Just content\n").unwrap();
+
+        assert!(parsed.is_none());
+    }
+
+    #[test]
     fn handles_crlf_frontmatter() {
         let (frontmatter, body) =
             split_yaml_frontmatter("---\r\ntitle: hi\r\n---\r\n<p>body</p>\r\n");
@@ -332,16 +359,43 @@ mod tests {
     }
 
     #[test]
-    fn parses_frontmatter_into_metadata_and_body() {
-        let (metadata, body) = HtmlParser::new()
-            .parse("---\ntitle: hi\n---\n<p>body</p>")
+    fn parses_frontmatter_into_metadata_and_content() {
+        let metadata = MarkdownParser::default()
+            .parse("---\ntitle: hi\ntemplate: post.html\n---\nbody")
+            .unwrap()
             .unwrap();
 
+        assert_eq!(metadata.template().as_path(), PathBuf::from("post.html"));
         assert_eq!(
-            metadata.inner().get("title"),
+            metadata.variables().get("title"),
             Some(&serde_json::json!("hi"))
         );
-        assert_eq!(body.inner(), "<p>body</p>");
+        assert_eq!(
+            metadata.variables().get(VAR_CONTENT),
+            Some(&serde_json::json!("<p>body</p>\n"))
+        );
+    }
+
+    #[test]
+    fn consumes_the_template_variable() {
+        let metadata = MarkdownParser::default()
+            .parse("---\ntemplate: post.html\n---\nbody")
+            .unwrap()
+            .unwrap();
+
+        assert!(!metadata.variables().contains_key(VAR_TEMPLATE));
+    }
+
+    #[test]
+    fn rejects_content_without_a_template() {
+        let error = format!(
+            "{:#}",
+            MarkdownParser::default()
+                .parse("---\ntitle: hi\n---\nbody")
+                .unwrap_err()
+        );
+
+        assert!(error.contains(VAR_TEMPLATE), "unexpected error: {error}");
     }
 
     #[test]
@@ -353,32 +407,27 @@ mod tests {
     fn renders_markdown_into_html() {
         let parser = MarkdownParser::new(MarkdownParserOptions::default());
 
-        let (metadata, body) = parser
-            .parse("---\ntitle: hi\n---\n# Title\n\nSome *emphasis*.\n")
-            .unwrap();
-
-        assert_eq!(
-            metadata.inner().get("title"),
-            Some(&serde_json::json!("hi"))
+        let content = rendered_markdown(
+            &parser,
+            "---\ntitle: hi\ntemplate: post.html\n---\n# Title\n\nSome *emphasis*.\n",
         );
-        assert!(body.inner().contains("<h1"));
-        assert!(body.inner().contains("<em>emphasis</em>"));
+
+        assert!(content.contains("<h1"));
+        assert!(content.contains("<em>emphasis</em>"));
     }
 
     #[test]
     fn keeps_raw_html_unless_disabled() {
-        let markdown = "Some <b>bold</b> text\n";
+        let markdown = "---\ntemplate: post.html\n---\nSome <b>bold</b> text\n";
 
-        let (_, raw) = MarkdownParser::new(MarkdownParserOptions::default())
-            .parse(markdown)
-            .unwrap();
-        assert!(raw.inner().contains("<b>bold</b>"));
+        let raw = rendered_markdown(&MarkdownParser::default(), markdown);
+        assert!(raw.contains("<b>bold</b>"));
 
-        let (_, omitted) =
-            MarkdownParser::new(MarkdownParserOptions::default().with_raw_html(false))
-                .parse(markdown)
-                .unwrap();
-        assert!(omitted.inner().contains("<!-- raw HTML omitted -->"));
+        let omitted = rendered_markdown(
+            &MarkdownParser::new(MarkdownParserOptions::default().with_raw_html(false)),
+            markdown,
+        );
+        assert!(omitted.contains("<!-- raw HTML omitted -->"));
     }
 
     #[test]
@@ -386,55 +435,65 @@ mod tests {
         let parser =
             MarkdownParser::new(MarkdownParserOptions::default().with_auto_heading_ids(false));
 
-        let (_, body) = parser.parse("# Title\n").unwrap();
+        let body = rendered_markdown(&parser, "---\ntemplate: post.html\n---\n# Title\n");
 
-        assert!(body.inner().contains(">Title</h1>"));
-        assert!(!body.inner().contains("id="));
+        assert!(body.contains(">Title</h1>"));
+        assert!(!body.contains("id="));
     }
 
     #[test]
     fn disables_emojis_when_requested() {
-        let markdown = "Hello :smile:\n";
+        let markdown = "---\ntemplate: post.html\n---\nHello :smile:\n";
 
-        let (_, rendered) = MarkdownParser::new(MarkdownParserOptions::default())
-            .parse(markdown)
-            .unwrap();
-        assert!(!rendered.inner().contains(":smile:"));
+        let rendered = rendered_markdown(&MarkdownParser::default(), markdown);
+        assert!(!rendered.contains(":smile:"));
 
-        let (_, literal) = MarkdownParser::new(MarkdownParserOptions::default().with_emojis(false))
-            .parse(markdown)
-            .unwrap();
-        assert!(literal.inner().contains(":smile:"));
+        let literal = rendered_markdown(
+            &MarkdownParser::new(MarkdownParserOptions::default().with_emojis(false)),
+            markdown,
+        );
+        assert!(literal.contains(":smile:"));
     }
 
     #[test]
     fn parses_json_metadata_and_content() {
-        let input = r#"{"metadata": {"title": "hi", "views": 42}, "content": {"items": ["a"]}}"#;
+        let input = "---\ntemplate: post.html\ntitle: hi\nviews: 42\n---\n{\"items\": [\"a\"]}";
 
-        let (metadata, body) = JsonParser.parse(input).unwrap();
+        let metadata = JsonParser.parse(input).unwrap().unwrap();
 
+        assert_eq!(metadata.template().as_path(), PathBuf::from("post.html"));
         assert_eq!(
-            metadata.inner().get("title"),
+            metadata.variables().get("title"),
             Some(&serde_json::json!("hi"))
         );
-        assert_eq!(metadata.inner().get("views"), Some(&serde_json::json!(42)));
         assert_eq!(
-            metadata.inner().get(VAR_CONTENT),
+            metadata.variables().get("views"),
+            Some(&serde_json::json!(42))
+        );
+        assert_eq!(
+            metadata.variables().get(VAR_CONTENT),
             Some(&serde_json::json!({"items": ["a"]}))
         );
-        assert_eq!(body.inner(), "");
     }
 
     #[test]
-    fn accepts_json_without_metadata_or_content() {
-        let (metadata, body) = JsonParser.parse("{}").unwrap();
+    fn skips_json_without_frontmatter() {
+        let parsed = JsonParser.parse(r#"{"items": ["a"]}"#).unwrap();
 
-        assert!(metadata.inner().is_empty());
-        assert_eq!(body.inner(), "");
+        assert!(parsed.is_none());
+    }
+
+    #[test]
+    fn rejects_content_without_a_frontmatter_body() {
+        assert!(JsonParser.parse("---\ntemplate: post.html\n---\n").is_err());
     }
 
     #[test]
     fn rejects_invalid_json() {
-        assert!(JsonParser.parse("{").is_err());
+        assert!(
+            JsonParser
+                .parse("---\ntemplate: post.html\n---\n{")
+                .is_err()
+        );
     }
 }
