@@ -1,8 +1,7 @@
-use std::path::PathBuf;
-
 use crate::path::SitePath;
-use anyhow::Context;
 use rushdown::{parser::ParserExtension, renderer::html::RendererExtension};
+use snafu::prelude::*;
+use std::path::PathBuf;
 
 // Reserved variables
 pub const VAR_TEMPLATE: &str = "template";
@@ -64,7 +63,7 @@ pub trait ContentParser {
     ///
     /// Returns `None` when the content declares no frontmatter, which marks the
     /// file for a verbatim copy instead of a rendering pass.
-    fn parse(&self, content: &str) -> anyhow::Result<Option<ParsedMetadata>>;
+    fn parse(&self, content: &str) -> Result<Option<ParsedMetadata>, snafu::Whatever>;
 }
 
 /// Feature switches for the Markdown parser and HTML renderer
@@ -232,7 +231,7 @@ impl MarkdownParser {
 }
 
 impl ContentParser for MarkdownParser {
-    fn parse(&self, content: &str) -> anyhow::Result<Option<ParsedMetadata>> {
+    fn parse(&self, content: &str) -> Result<Option<ParsedMetadata>, snafu::Whatever> {
         let (frontmatter, body) = split_yaml_frontmatter(content);
         if frontmatter.trim().is_empty() {
             return Ok(None);
@@ -250,7 +249,7 @@ impl ContentParser for MarkdownParser {
         let mut parsed_body = String::new();
         if let Err(e) = parser(&mut parsed_body, body) {
             // rushdown::Error is not Send, so anyhow cannot keep it as a source
-            anyhow::bail!("Could not parse Markdown content: {e}")
+            whatever!("Could not parse Markdown content: {e}")
         }
         var_map.insert(VAR_CONTENT.to_string(), parsed_body.into());
         Ok(Some(ParsedMetadata::new(template, var_map)))
@@ -263,7 +262,7 @@ impl ContentParser for MarkdownParser {
 pub struct JsonParser;
 
 impl ContentParser for JsonParser {
-    fn parse(&self, content: &str) -> anyhow::Result<Option<ParsedMetadata>> {
+    fn parse(&self, content: &str) -> Result<Option<ParsedMetadata>, snafu::Whatever> {
         let (frontmatter, body) = split_yaml_frontmatter(content);
         if frontmatter.trim().is_empty() {
             return Ok(None);
@@ -271,7 +270,8 @@ impl ContentParser for JsonParser {
         let mut var_map = parse_yaml_frontmatter(frontmatter)?;
         let template = pop_template_from_metadata(&mut var_map)?;
 
-        let parsed_json = serde_json::from_str(body).context("Could not parse JSON content")?;
+        let parsed_json =
+            serde_json::from_str(body).whatever_context("Could not parse JSON content")?;
         var_map.insert(VAR_CONTENT.to_string(), parsed_json);
         Ok(Some(ParsedMetadata::new(template, var_map)))
     }
@@ -294,8 +294,9 @@ fn split_yaml_frontmatter(content: &str) -> (&str, &str) {
 }
 
 /// Parse yaml frontmatter
-fn parse_yaml_frontmatter(frontmatter: &str) -> anyhow::Result<VarMap> {
-    let map = yaml_serde::from_str(frontmatter)?;
+fn parse_yaml_frontmatter(frontmatter: &str) -> Result<VarMap, snafu::Whatever> {
+    let map = yaml_serde::from_str(frontmatter)
+        .with_whatever_context(|e| format!("Couldn't deserialize frontmatter (error: {e})"))?;
     Ok(map)
 }
 
@@ -303,11 +304,13 @@ fn parse_yaml_frontmatter(frontmatter: &str) -> anyhow::Result<VarMap> {
 ///
 /// Every content file must name the template that renders it, so the variable
 /// is consumed here instead of reaching the template context.
-fn pop_template_from_metadata(metadata: &mut VarMap) -> anyhow::Result<SitePath> {
+fn pop_template_from_metadata(metadata: &mut VarMap) -> Result<SitePath, snafu::Whatever> {
     let template = metadata
         .remove(VAR_TEMPLATE)
         .and_then(|value| value.as_str().map(PathBuf::from))
-        .with_context(|| format!("No {VAR_TEMPLATE:?} variable in the content metadata"))?;
+        .whatever_context(format!(
+            "No {VAR_TEMPLATE:?} variable in the content metadata"
+        ))?;
     Ok(SitePath::new(template))
 }
 

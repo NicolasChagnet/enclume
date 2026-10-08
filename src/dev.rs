@@ -1,7 +1,7 @@
-use anyhow::{Context, Result};
 use axum::Router;
 use notify::{RecommendedWatcher, RecursiveMode};
 use notify_debouncer_full::{DebounceEventResult, Debouncer, RecommendedCache, new_debouncer};
+use snafu::{Report, prelude::*};
 use std::{path::Path, sync::mpsc, time::Duration};
 use tokio::signal;
 use tower_http::services::ServeDir;
@@ -12,7 +12,10 @@ const HOST: &str = "127.0.0.1";
 const PORT: u16 = 3000;
 
 /// Build once, then serve `out` and rebuild on every change under `base`
-pub async fn serve_and_watch(roots: Roots, builder: impl Builder + Send + 'static) -> Result<()> {
+pub async fn serve_and_watch(
+    roots: Roots,
+    builder: impl Builder + Send + 'static,
+) -> Result<(), snafu::Whatever> {
     builder.build()?;
 
     // The watcher must stay in scope while the server runs
@@ -22,7 +25,7 @@ pub async fn serve_and_watch(roots: Roots, builder: impl Builder + Send + 'stati
         result = serve(roots.out()) => result?,
         result = rebuild(events, builder) => result?,
         result = signal::ctrl_c() => {
-            result?;
+            result.whatever_context("Unknown error")?;
             log::info!("Shutting down");
         }
     }
@@ -30,32 +33,37 @@ pub async fn serve_and_watch(roots: Roots, builder: impl Builder + Send + 'stati
 }
 
 /// Serve the built site from `out`
-async fn serve(out: &Path) -> Result<()> {
+async fn serve(out: &Path) -> Result<(), snafu::Whatever> {
     let app = Router::new().fallback_service(ServeDir::new(out));
     let listener = tokio::net::TcpListener::bind((HOST, PORT))
         .await
-        .with_context(|| format!("Could not bind {HOST}:{PORT}"))?;
+        .whatever_context(format!("Could not bind {HOST}:{PORT}"))?;
     log::info!("Serving files at http://{HOST}:{PORT}");
-    axum::serve(listener, app).await?;
+    axum::serve(listener, app)
+        .await
+        .whatever_context("Error while serving the app")?;
     Ok(())
 }
 
 /// Watch `base` recursively and forward debounced events
 fn watch(
     base: &Path,
-) -> Result<(
-    Debouncer<RecommendedWatcher, RecommendedCache>,
-    mpsc::Receiver<DebounceEventResult>,
-)> {
+) -> Result<
+    (
+        Debouncer<RecommendedWatcher, RecommendedCache>,
+        mpsc::Receiver<DebounceEventResult>,
+    ),
+    snafu::Whatever,
+> {
     let (tx, rx) = mpsc::channel();
     let mut debouncer = new_debouncer(Duration::from_millis(150), None, move |result| {
         // The rebuild loop is gone; drop the event
         let _ = tx.send(result);
     })
-    .context("Could not create the file watcher")?;
+    .whatever_context("Could not create the file watcher")?;
     debouncer
         .watch(base, RecursiveMode::Recursive)
-        .with_context(|| format!("Could not watch {}", base.display()))?;
+        .whatever_context(format!("Could not watch {}", base.display()))?;
     log::info!("Watching {} for changes", base.display());
 
     Ok((debouncer, rx))
@@ -65,7 +73,7 @@ fn watch(
 async fn rebuild(
     events: mpsc::Receiver<DebounceEventResult>,
     builder: impl Builder + Send + 'static,
-) -> Result<()> {
+) -> Result<(), snafu::Whatever> {
     // The std receiver blocks, so keep it off the Tokio runtime
     tokio::task::spawn_blocking(move || {
         while let Ok(result) = events.recv() {
@@ -93,11 +101,13 @@ async fn rebuild(
                 Err(error) => {
                     // Keep serving the previous build: the author can fix the
                     // source and trigger another rebuild
-                    log::error!("Build failed: {error:#}");
+                    log::error!("Build failed: {}", Report::from_error(error));
                 }
             }
         }
     })
-    .await?;
+    .await
+    .whatever_context("Error rebuilding the site")?;
+
     Ok(())
 }

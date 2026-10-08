@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 
-use anyhow::Context;
 use rayon::prelude::*;
+use snafu::prelude::*;
 
 use crate::{
     content::{ContentKind, ContentSource},
@@ -18,7 +18,7 @@ pub trait Builder {
     /// the template it names, and copies the files without frontmatter as-is.
     /// `out` is replaced only after every file was written, so a failed build
     /// leaves the previous output untouched. Aborts on the first failure.
-    fn build(&self) -> anyhow::Result<()>;
+    fn build(&self) -> Result<(), snafu::Whatever>;
 }
 
 #[derive(Debug, Clone)]
@@ -36,7 +36,7 @@ impl SiteBuilder {
     }
 
     /// Build every file into `out`
-    fn build_into(&self, out: &Path) -> anyhow::Result<()> {
+    fn build_into(&self, out: &Path) -> Result<(), snafu::Whatever> {
         reset_dir(out)?;
 
         let content_dir = self.roots.content_dir();
@@ -46,6 +46,7 @@ impl SiteBuilder {
         templater.load_templates(&self.roots.templates_dir())?;
         let markdown_parser = MarkdownParser::new(self.markdown_options);
 
+        // Loop over every file inside the input directory
         content_files.into_par_iter().try_for_each(|file| {
             log::debug!("Handling {file}");
 
@@ -57,7 +58,7 @@ impl SiteBuilder {
                     ContentKind::Markdown => source.parse(&markdown_parser),
                     ContentKind::Json => source.parse(&JsonParser),
                 }
-                .with_context(|| format!("Could not parse {file}"))?,
+                .with_whatever_context(|_| format!("Could not parse {file}"))?,
                 // Files without a known content kind have no metadata either
                 Err(_) => None,
             };
@@ -65,14 +66,17 @@ impl SiteBuilder {
             // Files which declare no metadata are copied verbatim
             let Some(parsed) = parsed else {
                 return copy_file_destination(&content_dir.join(file.as_path()), &destination)
-                    .with_context(|| format!("Could not copy {file} into {}", out.display()));
+                    .with_whatever_context(|_| {
+                        format!("Could not copy {file} into {}", out.display())
+                    });
             };
 
             let content = parsed
                 .render(&templater)
-                .with_context(|| format!("Could not render {file}"))?;
+                .with_whatever_context(|_| format!("Could not render {file}"))?;
             write_to_file(&destination.with_extension("html"), content.as_str())
-                .with_context(|| format!("Could not write {file}"))
+                .with_whatever_context(|_| format!("Could not write {file}"))?;
+            Ok(())
         })?;
         Ok(())
     }
@@ -86,7 +90,7 @@ impl SiteBuilder {
 }
 
 impl Builder for SiteBuilder {
-    fn build(&self) -> anyhow::Result<()> {
+    fn build(&self) -> Result<(), snafu::Whatever> {
         log::info!("Building website...");
         // Build next to `out` so the swap stays on one filesystem
         let staging = self.staging_dir();
@@ -99,37 +103,38 @@ impl Builder for SiteBuilder {
 }
 
 /// Replace `out` with the freshly built `staging` directory
-fn replace_dir(staging: &Path, out: &Path) -> anyhow::Result<()> {
+fn replace_dir(staging: &Path, out: &Path) -> Result<(), snafu::Whatever> {
     ensure_deletable(out)?;
     match std::fs::remove_dir_all(out) {
         Ok(()) => {}
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-        Err(e) => return Err(e.into()),
+        Err(e) => snafu::whatever!("Failed to delete {:?} (error: {e})", out),
     }
-    std::fs::rename(staging, out)?;
+    std::fs::rename(staging, out)
+        .whatever_context(format!("Couldn't rename {staging:?} into {out:?}"))?;
     Ok(())
 }
 
 /// Delete `dir` and recreate it empty
 ///
 /// Refuses directories which hold user data, such as the working directory
-fn reset_dir(dir: &Path) -> anyhow::Result<()> {
+fn reset_dir(dir: &Path) -> Result<(), snafu::Whatever> {
     ensure_deletable(dir)?;
     match std::fs::remove_dir_all(dir) {
         Ok(()) => {}
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-        Err(e) => return Err(e.into()),
+        Err(e) => snafu::whatever!("Failed to delete {:?} (error: {e})", dir),
     }
-    std::fs::create_dir_all(dir)?;
+    std::fs::create_dir_all(dir).whatever_context(format!("Couldn't create directory {dir:?}"))?;
     Ok(())
 }
 
 /// Refuse deletion of directories which hold user data
-fn ensure_deletable(dir: &Path) -> anyhow::Result<()> {
-    let cwd = std::env::current_dir()?;
+fn ensure_deletable(dir: &Path) -> Result<(), snafu::Whatever> {
+    let cwd = std::env::current_dir().whatever_context("Couldn't access current directory")?;
     let home = std::env::var_os("HOME").map(PathBuf::from);
     if dir.parent().is_none() || dir == cwd.as_path() || home.as_deref() == Some(dir) {
-        anyhow::bail!(
+        whatever!(
             "Refusing to delete {}: it is a root, home, or working directory",
             dir.display()
         );
@@ -138,46 +143,53 @@ fn ensure_deletable(dir: &Path) -> anyhow::Result<()> {
 }
 
 /// Write rendered content to a file
-fn write_to_file(path: &Path, content: &str) -> anyhow::Result<()> {
+fn write_to_file(path: &Path, content: &str) -> Result<(), snafu::Whatever> {
     if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
+        std::fs::create_dir_all(parent)
+            .whatever_context(format!("Couldn't create parent directory {parent:?}"))?;
     }
-    std::fs::write(path, content)?;
+    std::fs::write(path, content).whatever_context(format!("Couldn't write file {path:?}"))?;
     Ok(())
 }
 
 /// Copy a file to the destination folder as-is
-fn copy_file_destination(origin_path: &Path, destination_path: &Path) -> anyhow::Result<()> {
+fn copy_file_destination(
+    origin_path: &Path,
+    destination_path: &Path,
+) -> Result<(), snafu::Whatever> {
     if let Some(parent) = destination_path.parent() {
-        std::fs::create_dir_all(parent)?;
+        std::fs::create_dir_all(parent)
+            .whatever_context(format!("Couldn't create parent directory {parent:?}"))?;
     }
-    std::fs::copy(origin_path, destination_path)?;
+    std::fs::copy(origin_path, destination_path).whatever_context(format!(
+        "Couldn't copy {origin_path:?} to {destination_path:?}"
+    ))?;
     Ok(())
 }
 
 /// Get all the files within the content root, as site-relative paths, sorted for a deterministic build
-fn get_all_files(content_dir: &Path) -> anyhow::Result<Vec<SitePath>> {
+fn get_all_files(content_dir: &Path) -> Result<Vec<SitePath>, snafu::Whatever> {
     let pattern = content_dir.join("**/*");
     let mut files = glob_files(&pattern)?
         .into_iter()
         .map(|path| {
-            let relative = path.strip_prefix(content_dir).with_context(|| {
-                format!(
-                    "File {} is outside {}",
-                    path.display(),
-                    content_dir.display()
-                )
-            })?;
+            let relative = path.strip_prefix(content_dir).whatever_context(format!(
+                "File {} is outside {}",
+                path.display(),
+                content_dir.display()
+            ))?;
             SitePath::try_from(relative.to_path_buf())
         })
-        .collect::<anyhow::Result<Vec<_>>>()?;
+        .collect::<Result<Vec<SitePath>, snafu::Whatever>>()?;
     files.sort();
     files.dedup();
     Ok(files)
 }
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use snafu::Report;
     use std::fs;
 
     struct Site {
@@ -208,11 +220,14 @@ mod tests {
             self.roots.out().join(relative).exists()
         }
 
-        fn build(&self) -> anyhow::Result<()> {
+        fn build(&self) -> Result<(), snafu::Whatever> {
             self.build_with(MarkdownParserOptions::default())
         }
 
-        fn build_with(&self, markdown_options: MarkdownParserOptions) -> anyhow::Result<()> {
+        fn build_with(
+            &self,
+            markdown_options: MarkdownParserOptions,
+        ) -> Result<(), snafu::Whatever> {
             SiteBuilder::new(self.roots.clone(), markdown_options).build()
         }
     }
@@ -302,7 +317,7 @@ mod tests {
         let site = Site::new();
         site.write("root/blog/post.md", "---\ntitle: Hello\n---\n# body\n");
 
-        let error = format!("{:#}", site.build().unwrap_err());
+        let error = format!("{}", Report::from_error(site.build().unwrap_err()));
 
         assert!(error.contains("post.md"), "unexpected error: {error}");
         assert!(error.contains("template"), "unexpected error: {error}");
@@ -314,7 +329,7 @@ mod tests {
         site.write("templates/post.html", "{{__content__}}");
         site.write("root/blog/post.json", "---\ntemplate: post.html\n---\n{");
 
-        let error = format!("{:#}", site.build().unwrap_err());
+        let error = format!("{}", Report::from_error(site.build().unwrap_err()));
 
         assert!(
             error.contains("Could not parse JSON content"),

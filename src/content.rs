@@ -1,11 +1,12 @@
-use std::path::Path;
-
 use crate::{
     parsers::{ContentParser, ParsedMetadata, RawHtml},
     path::SitePath,
     templates::Templater,
 };
+use snafu::{FromString, prelude::*};
+use std::path::Path;
 
+/// Parseable content kinds
 #[derive(Debug, Clone, Copy)]
 pub enum ContentKind {
     Markdown,
@@ -13,11 +14,11 @@ pub enum ContentKind {
 }
 
 impl ContentKind {
-    pub fn try_from_extension(extension: &str) -> anyhow::Result<Self> {
+    pub fn try_from_extension(extension: &str) -> Result<Self, snafu::Whatever> {
         let val = match extension {
             "md" => Self::Markdown,
             "json" => Self::Json,
-            _ => anyhow::bail!("Extension {:?} could not be parsed!", extension),
+            _ => whatever!("Extension {:?} could not be parsed!", extension),
         };
         Ok(val)
     }
@@ -34,13 +35,18 @@ impl<'a> ContentSource<'a> {
         Self { content_dir, file }
     }
 
-    pub fn kind(&self) -> anyhow::Result<ContentKind> {
+    pub fn kind(&self) -> Result<ContentKind, snafu::Whatever> {
         let extension = self
             .file
             .as_path()
             .extension()
             .and_then(|s| s.to_str())
-            .ok_or_else(|| anyhow::anyhow!("Could not extract extension from {}", self.file))?;
+            .ok_or_else(|| {
+                snafu::Whatever::without_source(format!(
+                    "Could not extract extension from {}",
+                    self.file
+                ))
+            })?;
         ContentKind::try_from_extension(extension)
     }
 
@@ -48,8 +54,13 @@ impl<'a> ContentSource<'a> {
     ///
     /// `None` marks a file which declares no metadata, and which the build
     /// copies verbatim instead of rendering.
-    pub fn parse<P: ContentParser>(self, parser: &P) -> anyhow::Result<Option<ContentParsed>> {
-        let content = std::fs::read_to_string(self.content_dir.join(self.file.as_path()))?;
+    pub fn parse<P: ContentParser>(
+        self,
+        parser: &P,
+    ) -> Result<Option<ContentParsed>, snafu::Whatever> {
+        let path = self.content_dir.join(self.file.as_path());
+        let content = std::fs::read_to_string(&path)
+            .whatever_context(format!("Couldn't read content of {path:?}"))?;
         let Some(metadata) = parser.parse(&content)? else {
             return Ok(None);
         };
@@ -80,7 +91,7 @@ impl ContentParsed {
     }
 
     /// Flatten the element into the variable map handed to templates
-    pub fn render<T: Templater>(self, templater: &T) -> anyhow::Result<RenderedContent> {
+    pub fn render<T: Templater>(self, templater: &T) -> Result<RenderedContent, snafu::Whatever> {
         let (template, values) = self.metadata.into_attrs();
         let rendered_content = templater.render(&template, values)?;
         Ok(RenderedContent::new(rendered_content))

@@ -1,19 +1,19 @@
-use std::path::{Path, PathBuf};
-
 use crate::path::SitePath;
+use snafu::prelude::*;
+use std::path::{Path, PathBuf};
 
 /// Find all existing files matching a glob pattern.
 ///
 /// The `glob` crate has no brace support, so `{md,html}` alternatives are
 /// expanded into separate patterns before matching.
-pub fn glob_files(pattern: &Path) -> anyhow::Result<Vec<PathBuf>> {
+pub fn glob_files(pattern: &Path) -> Result<Vec<PathBuf>, snafu::Whatever> {
     let Some(pattern) = pattern.to_str() else {
-        anyhow::bail!("Glob pattern {:?} is not valid UTF-8", pattern);
+        whatever!("Glob pattern {:?} is not valid UTF-8", pattern);
     };
     let mut files = Vec::new();
     for expanded in expand_braces(pattern) {
         let paths = glob::glob(&expanded)
-            .map_err(|e| anyhow::anyhow!("Invalid glob pattern {:?}: {e}", expanded))?;
+            .with_whatever_context(|e| format!("Invalid glob pattern {:?}: {e}", expanded))?;
         for entry in paths {
             let path = match entry {
                 Ok(path) => path,
@@ -31,13 +31,14 @@ pub fn glob_files(pattern: &Path) -> anyhow::Result<Vec<PathBuf>> {
 }
 
 /// Select the files matching a pattern relative to a site root, without touching the filesystem
-pub fn match_files(pattern: &str, files: &[SitePath]) -> anyhow::Result<Vec<SitePath>> {
+pub fn match_files(pattern: &str, files: &[SitePath]) -> Result<Vec<SitePath>, snafu::Whatever> {
     let patterns = expand_braces(pattern)
         .into_iter()
         .map(|p| {
-            glob::Pattern::new(&p).map_err(|e| anyhow::anyhow!("Invalid glob pattern {p:?}: {e}"))
+            glob::Pattern::new(&p)
+                .with_whatever_context(|e| format!("Invalid glob pattern {p:?}: {e}"))
         })
-        .collect::<anyhow::Result<Vec<_>>>()?;
+        .collect::<Result<Vec<glob::Pattern>, snafu::Whatever>>()?;
     // `require_literal_separator` keeps `*` from crossing `/`, which matches
     // what a filesystem walk would return
     let options = glob::MatchOptions {

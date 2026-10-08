@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use anyhow::Context;
+use snafu::prelude::*;
 
 use crate::{
     parsers::{RawHtml, VAR_CONTENT, VarMap},
@@ -8,7 +8,7 @@ use crate::{
 };
 
 pub trait Templater {
-    fn render(&self, template: &SitePath, values: VarMap) -> anyhow::Result<RawHtml>;
+    fn render(&self, template: &SitePath, values: VarMap) -> Result<RawHtml, snafu::Whatever>;
 }
 
 #[derive(Debug, Clone)]
@@ -24,35 +24,39 @@ impl TeraTemplater {
     }
 
     /// Register every template in `template_dir`, keyed by its path relative to it
-    pub fn load_templates(&mut self, template_dir: &Path) -> anyhow::Result<()> {
+    pub fn load_templates(&mut self, template_dir: &Path) -> Result<(), snafu::Whatever> {
         let templates = crate::glob::glob_files(&template_dir.join("**/*.html"))?;
-        self.engine.add_template_files(
-            templates
-                .into_iter()
-                .map(|file| {
-                    let name = file
-                        .strip_prefix(template_dir)
-                        .with_context(|| {
-                            format!(
-                                "Template {} is not inside {}",
-                                file.display(),
-                                template_dir.display()
-                            )
-                        })?
-                        .to_string_lossy()
-                        .into_owned();
-                    Ok((file, Some(name)))
-                })
-                .collect::<anyhow::Result<Vec<_>>>()?,
-        )?;
+        let files = templates
+            .into_iter()
+            .map(|file| {
+                let name = file
+                    .strip_prefix(template_dir)
+                    .with_whatever_context(|_| {
+                        format!(
+                            "Template {} is not inside {}",
+                            file.display(),
+                            template_dir.display()
+                        )
+                    })?
+                    .to_string_lossy()
+                    .into_owned();
+                Ok((file, Some(name)))
+            })
+            .collect::<Result<Vec<_>, snafu::Whatever>>()?;
+        self.engine
+            .add_template_files(files)
+            .whatever_context("Could not register the templates")?;
         Ok(())
     }
 }
 
 impl Templater for TeraTemplater {
-    fn render(&self, template: &SitePath, values: VarMap) -> anyhow::Result<RawHtml> {
+    fn render(&self, template: &SitePath, values: VarMap) -> Result<RawHtml, snafu::Whatever> {
         let context = convert_values_into_context(values)?;
-        let rendered = self.engine.render(&template.to_string(), &context)?;
+        let rendered = self
+            .engine
+            .render(&template.to_string(), &context)
+            .with_whatever_context(|_| format!("Could not render {template}"))?;
         Ok(RawHtml::new(rendered))
     }
 }
@@ -62,13 +66,16 @@ impl Templater for TeraTemplater {
 /// Values keep their JSON type so templates can read structured content. The
 /// content of a Markdown file is an HTML fragment, so it bypasses the escaping
 /// applied to every other string.
-fn convert_values_into_context(values: VarMap) -> anyhow::Result<tera::Context> {
+fn convert_values_into_context(values: VarMap) -> Result<tera::Context, snafu::Whatever> {
     let mut context = tera::Context::new();
     for (key, value) in values {
         let value = match (key.as_str(), value) {
             (VAR_CONTENT, serde_json::Value::String(html)) => tera::Value::safe_string(&html),
-            (_, value) => tera::Value::try_from_serializable(&value)
-                .with_context(|| format!("Could not convert variable {key:?} for the template"))?,
+            (_, value) => {
+                tera::Value::try_from_serializable(&value).with_whatever_context(|_| {
+                    format!("Could not convert variable {key:?} for the template")
+                })?
+            }
         };
         context.insert_value(key, value);
     }

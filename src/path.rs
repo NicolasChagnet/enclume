@@ -1,6 +1,5 @@
+use snafu::prelude::*;
 use std::path::{Component, Path, PathBuf};
-
-use anyhow::Context;
 
 pub const COLLECTIONS_DIR: &str = "collections";
 pub const CONTENT_DIR: &str = "root";
@@ -20,14 +19,18 @@ pub struct Roots {
 
 impl Roots {
     /// Resolve both roots, refusing overlapping trees before anything is deleted
-    pub fn new(base: PathBuf, out: PathBuf) -> anyhow::Result<Self> {
-        let base = std::path::absolute(&base)?;
+    pub fn new(base: PathBuf, out: PathBuf) -> Result<Self, snafu::Whatever> {
+        let base = std::path::absolute(&base)
+            .whatever_context(format!("Couldn't convert {base:?} to absolute path"))?;
         let base = std::fs::canonicalize(&base)
-            .with_context(|| format!("Base directory {} does not exist", base.display()))?;
-        let out = resolve_existing_prefix(&std::path::absolute(out)?);
+            .whatever_context(format!("Base directory {} does not exist", base.display()))?;
+        let out = resolve_existing_prefix(
+            &std::path::absolute(&out)
+                .whatever_context(format!("Couldn't convert {out:?} to absolute path"))?,
+        );
         let roots = Self { base, out };
         if roots.base.starts_with(&roots.out) || roots.out.starts_with(&roots.base) {
-            anyhow::bail!(
+            whatever!(
                 "Output directory {} overlaps base directory {}",
                 roots.out.display(),
                 roots.base.display()
@@ -101,7 +104,7 @@ impl SitePath {
 }
 
 impl TryFrom<PathBuf> for SitePath {
-    type Error = anyhow::Error;
+    type Error = snafu::Whatever;
 
     fn try_from(value: PathBuf) -> Result<Self, Self::Error> {
         let valid = !value.as_os_str().is_empty()
@@ -109,7 +112,7 @@ impl TryFrom<PathBuf> for SitePath {
                 .components()
                 .all(|component| matches!(component, Component::Normal(_)));
         if !valid {
-            anyhow::bail!("Not a site-relative path: {}", value.display());
+            whatever!("Not a site-relative path: {}", value.display());
         }
         Ok(Self(value))
     }
@@ -125,7 +128,7 @@ impl std::fmt::Display for SitePath {
 mod tests {
     use super::*;
 
-    fn site_path(path: &str) -> anyhow::Result<SitePath> {
+    fn site_path(path: &str) -> Result<SitePath, snafu::Whatever> {
         SitePath::try_from(PathBuf::from(path))
     }
 

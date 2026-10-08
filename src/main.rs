@@ -1,7 +1,6 @@
-use std::path::PathBuf;
-
-use anyhow::Result;
 use clap::{Parser, Subcommand};
+use snafu::prelude::*;
+use std::path::PathBuf;
 
 use crate::{
     build::{Builder, SiteBuilder},
@@ -27,16 +26,20 @@ struct Args {
 #[derive(Debug, Clone, Subcommand)]
 enum Command {
     Build {
+        /// Input path
         #[arg(short, long, default_value = "src")]
         base: PathBuf,
+        /// Output path
         #[arg(short, long, default_value = "dist")]
         out: PathBuf,
         #[command(flatten)]
         markdown_args: MarkdownParserCliOptions,
     },
     Dev {
+        /// Input path
         #[arg(short, long, default_value = "src")]
         base: PathBuf,
+        /// Output path
         #[arg(short, long, default_value = "dist")]
         out: PathBuf,
         #[command(flatten)]
@@ -78,8 +81,10 @@ impl From<MarkdownParserCliOptions> for MarkdownParserOptions {
     }
 }
 
+/// The `report` attribute prints the full cause chain when the command fails
+#[snafu::report]
 #[tokio::main]
-async fn main() -> Result<()> {
+async fn main() -> Result<(), snafu::Whatever> {
     initialize_logging()?;
 
     let args = Args::parse();
@@ -106,7 +111,7 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-fn initialize_logging() -> anyhow::Result<()> {
+fn initialize_logging() -> Result<(), snafu::Whatever> {
     use std::io::Write;
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"))
         .format(|buf, record| {
@@ -119,7 +124,8 @@ fn initialize_logging() -> anyhow::Result<()> {
                 record.args()
             )
         })
-        .try_init()?;
+        .try_init()
+        .whatever_context("Failed to initialize logging...")?;
     Ok(())
 }
 
