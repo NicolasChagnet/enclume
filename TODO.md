@@ -3,10 +3,10 @@
 ## v1.0
 
 Core
-- [  ] Parsing and rendering of content
+- [x] Parsing and rendering of content
   - [x] Markdown parsing
   - [x] JSON parsing
-  - [  ] YAML parsing
+  - [x] YAML parsing
   - [x] HTML parsing
   - [x] Template layout rendering
 - [  ] Generate pages at predictable URLs
@@ -23,6 +23,11 @@ Workflow
 - [x] Provide a local development server
 - [x] Watch files and rebuild on changes
 - [x] Init command creating basic structure
+
+Build
+- [  ] Quality actions
+- [  ] Release setup
+- [  ] Homebrew integration
 
 ## v1.1
 

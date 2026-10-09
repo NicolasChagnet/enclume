@@ -12,6 +12,7 @@ pub enum ContentKind {
     Markdown,
     Json,
     Html,
+    Yaml,
 }
 
 impl ContentKind {

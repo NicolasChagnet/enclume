@@ -6,7 +6,7 @@ use snafu::prelude::*;
 use crate::{
     content::{ContentKind, ContentSource},
     glob::glob_files,
-    parsers::{HtmlParser, JsonParser, MarkdownParser, MarkdownParserOptions},
+    parsers::{HtmlParser, JsonParser, MarkdownParser, MarkdownParserOptions, YamlParser},
     path::{Roots, SitePath},
     templates::TeraTemplater,
 };
@@ -56,8 +56,9 @@ impl SiteBuilder {
                 // Content files name their rendering template in their metadata
                 Ok(kind) => match kind {
                     ContentKind::Markdown => source.parse(&markdown_parser),
-                    ContentKind::Json => source.parse(&JsonParser::default()),
-                    ContentKind::Html => source.parse(&HtmlParser::default()),
+                    ContentKind::Json => source.parse(&JsonParser),
+                    ContentKind::Html => source.parse(&HtmlParser),
+                    ContentKind::Yaml => source.parse(&YamlParser),
                 }
                 .with_whatever_context(|_| format!("Could not parse {file}"))?,
                 // Files without a known content kind have no metadata either

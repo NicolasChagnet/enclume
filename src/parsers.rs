@@ -323,6 +323,25 @@ impl ContentParser for HtmlParser {
     }
 }
 
+/// YAML content parser
+///
+/// Should be of the same format as a generic frontmatter
+#[derive(Debug, Clone, Default)]
+pub struct YamlParser;
+
+impl ContentParser for YamlParser {
+    fn parse(&self, content: &str) -> Result<Option<ParsedData>, snafu::Whatever> {
+        let (frontmatter, body) = split_yaml_frontmatter(content);
+        // We expect there to NOT be a frontmatter here
+        if !frontmatter.trim().is_empty() {
+            return Ok(None);
+        }
+        let raw_metadata = parse_yaml_frontmatter(body)?;
+        let parsed_data = ParsedData::from_raw(raw_metadata, "".into())?;
+        Ok(Some(parsed_data))
+    }
+}
+
 /// Splits a string into a yaml frontmatter part and the rest
 fn split_yaml_frontmatter(content: &str) -> (&str, &str) {
     // (?s) makes `.` match newlines. Group 1 is the yaml frontmatter body,
