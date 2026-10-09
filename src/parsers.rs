@@ -86,12 +86,73 @@ impl ParsedData {
     }
 }
 
+/// Parseable content kinds
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum ContentKind {
+    Markdown,
+    Json,
+    Html,
+    Yaml,
+    #[default]
+    Other,
+}
+
+impl ContentKind {
+    pub fn from_extension(extension: &str) -> Self {
+        match extension {
+            "md" => Self::Markdown,
+            "json" => Self::Json,
+            "html" => Self::Html,
+            "yaml" => Self::Yaml,
+            _ => Self::Other,
+        }
+    }
+
+    /// The kind of a file, from its extension
+    pub fn from_path(path: &SitePath) -> Self {
+        path.extension()
+            .map(Self::from_extension)
+            .unwrap_or_default()
+    }
+}
+
 pub trait ContentParser {
     /// Parse a string into metadata
     ///
     /// Returns `None` when the content declares no frontmatter, which marks the
     /// file for a verbatim copy instead of a rendering pass.
     fn parse(&self, content: &str) -> Result<Option<ParsedData>, snafu::Whatever>;
+}
+
+/// The parsers the build dispatches to, by content kind
+#[derive(Debug, Clone, Default)]
+pub struct Parsers {
+    markdown: MarkdownParser,
+    json: JsonParser,
+    html: HtmlParser,
+    yaml: YamlParser,
+}
+
+impl Parsers {
+    pub fn new(markdown_options: MarkdownParserOptions) -> Self {
+        Self {
+            markdown: MarkdownParser::new(markdown_options),
+            ..Default::default()
+        }
+    }
+
+    /// The parser which handles `kind`
+    ///
+    /// `None` when no parser handles it, which marks the file for a verbatim copy.
+    pub fn parser_for(&self, kind: ContentKind) -> Option<&dyn ContentParser> {
+        match kind {
+            ContentKind::Markdown => Some(&self.markdown),
+            ContentKind::Json => Some(&self.json),
+            ContentKind::Html => Some(&self.html),
+            ContentKind::Yaml => Some(&self.yaml),
+            ContentKind::Other => None,
+        }
+    }
 }
 
 /// Feature switches for the Markdown parser and HTML renderer

@@ -9,14 +9,14 @@ Core
   - [x] YAML parsing
   - [x] HTML parsing
   - [x] Template layout rendering
-- [  ] Generate pages at predictable URLs
+- [x] Generate pages at predictable URLs
 - [x] Copy static assets
-- [  ] Read configuration and expose site-wide variables
+- [  ] ~Read configuration and expose site-wide variables~
 - [x] Clean and regenerate the output directory
 - [x] Report actionable build errors
 
 Publishing
-- [  ] Support page metadata and canonical URLs
+- [x] Support page metadata and canonical URLs
 - [x] Support a custom 404 page
 
 Workflow

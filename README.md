@@ -54,7 +54,7 @@ The `template` key is **reserved** and should refer to the template used. Templa
 <html lang="en">
 <head>
     {% block head %}
-    <link rel="stylesheet" href="style.css" />
+    <link rel="stylesheet" href="{{ asset(path=\"style.css\") }}" />
     <title>{% block title %}{% endblock title %} - My Webpage</title>
     {% endblock head %}
 </head>
@@ -77,6 +77,8 @@ and the blog post template
 ```
 
 The `__content__` is a reserved templating variable for the parsed Markdown HTML.
+
+Pages are built with clean URLs by default: `about.md` becomes `about/index.html`. Pass `--no-clean-urls` to build `about.html` instead. Pass `--hash-assets` to add a content hash to the name of every css and js file (`style.css` becomes `style.<hash>.css`), which `asset()` resolves.
 
 ## AI usage
 

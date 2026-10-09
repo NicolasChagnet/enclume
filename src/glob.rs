@@ -2,11 +2,32 @@ use crate::path::SitePath;
 use snafu::prelude::*;
 use std::path::{Path, PathBuf};
 
+/// Match `pattern` below `root` and return the existing files as root-relative paths
+///
+/// The result is sorted and deduplicated, so a build stays deterministic and
+/// brace alternatives cannot return the same file twice.
+pub fn glob_relative(root: &Path, pattern: &str) -> Result<Vec<SitePath>, snafu::Whatever> {
+    let mut files = glob_files(&root.join(pattern))?
+        .into_iter()
+        .map(|path| {
+            let relative = path.strip_prefix(root).whatever_context(format!(
+                "File {} is outside {}",
+                path.display(),
+                root.display()
+            ))?;
+            SitePath::try_from(relative.to_path_buf())
+        })
+        .collect::<Result<Vec<SitePath>, snafu::Whatever>>()?;
+    files.sort();
+    files.dedup();
+    Ok(files)
+}
+
 /// Find all existing files matching a glob pattern.
 ///
 /// The `glob` crate has no brace support, so `{md,html}` alternatives are
 /// expanded into separate patterns before matching.
-pub fn glob_files(pattern: &Path) -> Result<Vec<PathBuf>, snafu::Whatever> {
+fn glob_files(pattern: &Path) -> Result<Vec<PathBuf>, snafu::Whatever> {
     let Some(pattern) = pattern.to_str() else {
         whatever!("Glob pattern {:?} is not valid UTF-8", pattern);
     };

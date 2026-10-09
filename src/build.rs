@@ -1,12 +1,16 @@
-use std::path::{Path, PathBuf};
+use std::{
+    path::{Path, PathBuf},
+    sync::Arc,
+};
 
 use rayon::prelude::*;
 use snafu::prelude::*;
 
 use crate::{
-    content::{ContentKind, ContentSource},
-    glob::glob_files,
-    parsers::{HtmlParser, JsonParser, MarkdownParser, MarkdownParserOptions, YamlParser},
+    content::{Content, ContentFile},
+    glob::glob_relative,
+    output::{Assets, Output, OutputLayout},
+    parsers::{MarkdownParserOptions, Parsers},
     path::{Roots, SitePath},
     templates::TeraTemplater,
 };
@@ -24,13 +28,19 @@ pub trait Builder {
 #[derive(Debug, Clone)]
 pub struct SiteBuilder {
     roots: Roots,
+    layout: OutputLayout,
     markdown_options: MarkdownParserOptions,
 }
 
 impl SiteBuilder {
-    pub fn new(roots: Roots, markdown_options: MarkdownParserOptions) -> Self {
+    pub fn new(
+        roots: Roots,
+        layout: OutputLayout,
+        markdown_options: MarkdownParserOptions,
+    ) -> Self {
         Self {
             roots,
+            layout,
             markdown_options,
         }
     }
@@ -39,48 +49,36 @@ impl SiteBuilder {
     fn build_into(&self, out: &Path) -> Result<(), snafu::Whatever> {
         reset_dir(out)?;
 
-        let content_dir = self.roots.content_dir();
-        let content_files = get_all_files(&content_dir)?;
+        let roots = &self.roots;
+        let files = glob_relative(&roots.content_dir(), "**/*")?;
 
-        let mut templater = TeraTemplater::new();
-        templater.load_templates(&self.roots.templates_dir())?;
-        let markdown_parser = MarkdownParser::new(self.markdown_options);
+        // Fingerprint the assets first: templates link to them while they render
+        // Wrap in Arc for the templater so 'assets' can be used within the template functions
+        let assets = Arc::new(scan_assets(roots, &files, &self.layout)?);
+        let output = Output::new(out, &self.layout, &assets);
+
+        let mut templater = TeraTemplater::new(Arc::clone(&assets));
+        templater.load_templates(&roots.templates_dir())?;
+        let parsers = Parsers::new(self.markdown_options);
 
         // Loop over every file inside the input directory
-        content_files.into_par_iter().try_for_each(|file| {
+        files.into_par_iter().try_for_each(|path| {
+            let file = ContentFile::locate(roots, path)?;
             log::debug!("Handling {file}");
 
-            let destination = out.join(file.as_path());
-            let source = ContentSource::new(&content_dir, file.clone());
-            let parsed = match source.kind() {
-                // Content files name their rendering template in their metadata
-                Ok(kind) => match kind {
-                    ContentKind::Markdown => source.parse(&markdown_parser),
-                    ContentKind::Json => source.parse(&JsonParser),
-                    ContentKind::Html => source.parse(&HtmlParser),
-                    ContentKind::Yaml => source.parse(&YamlParser),
-                }
-                .with_whatever_context(|_| format!("Could not parse {file}"))?,
-                // Files without a known content kind have no metadata either
-                Err(_) => None,
-            };
+            let parsed = file
+                .parse(&parsers)
+                .with_whatever_context(|_| format!("Could not parse {file}"))?;
 
-            // Files which declare no metadata are copied verbatim
-            let Some(parsed) = parsed else {
-                return copy_file_destination(&content_dir.join(file.as_path()), &destination)
-                    .with_whatever_context(|_| {
-                        format!("Could not copy {file} into {}", out.display())
-                    });
-            };
-
-            let content = parsed
-                .render(&templater)
-                .with_whatever_context(|_| format!("Could not render {file}"))?;
-            write_to_file(&destination.with_extension("html"), content.as_str())
-                .with_whatever_context(|_| format!("Could not write {file}"))?;
-            Ok(())
-        })?;
-        Ok(())
+            match parsed {
+                // Files which declare no metadata are copied verbatim
+                None => file.write(&output),
+                Some(parsed) => parsed
+                    .render(&templater)
+                    .with_whatever_context(|_| format!("Could not render {file}"))?
+                    .write(&output),
+            }
+        })
     }
 
     /// Sibling directory the build writes into before replacing `out`
@@ -102,6 +100,27 @@ impl Builder for SiteBuilder {
         }
         replace_dir(&staging, self.roots.out())
     }
+}
+
+/// Map every content file to its built name, fingerprinting the assets on the way
+///
+/// Templates read the same table through `asset()`, so a link and the file the
+/// build writes always agree.
+fn scan_assets(
+    roots: &Roots,
+    files: &[SitePath],
+    layout: &OutputLayout,
+) -> Result<Assets, snafu::Whatever> {
+    let mut assets = Assets::default();
+    for path in files {
+        let file = ContentFile::locate(roots, path.clone())?;
+        let digest = layout
+            .fingerprints(path)
+            .then(|| file.fingerprint())
+            .transpose()?;
+        assets.insert(path.clone(), layout.copied_file(path, digest.as_deref()));
+    }
+    Ok(assets)
 }
 
 /// Replace `out` with the freshly built `staging` directory
@@ -144,50 +163,6 @@ fn ensure_deletable(dir: &Path) -> Result<(), snafu::Whatever> {
     Ok(())
 }
 
-/// Write rendered content to a file
-fn write_to_file(path: &Path, content: &str) -> Result<(), snafu::Whatever> {
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)
-            .whatever_context(format!("Couldn't create parent directory {parent:?}"))?;
-    }
-    std::fs::write(path, content).whatever_context(format!("Couldn't write file {path:?}"))?;
-    Ok(())
-}
-
-/// Copy a file to the destination folder as-is
-fn copy_file_destination(
-    origin_path: &Path,
-    destination_path: &Path,
-) -> Result<(), snafu::Whatever> {
-    if let Some(parent) = destination_path.parent() {
-        std::fs::create_dir_all(parent)
-            .whatever_context(format!("Couldn't create parent directory {parent:?}"))?;
-    }
-    std::fs::copy(origin_path, destination_path).whatever_context(format!(
-        "Couldn't copy {origin_path:?} to {destination_path:?}"
-    ))?;
-    Ok(())
-}
-
-/// Get all the files within the content root, as site-relative paths, sorted for a deterministic build
-fn get_all_files(content_dir: &Path) -> Result<Vec<SitePath>, snafu::Whatever> {
-    let pattern = content_dir.join("**/*");
-    let mut files = glob_files(&pattern)?
-        .into_iter()
-        .map(|path| {
-            let relative = path.strip_prefix(content_dir).whatever_context(format!(
-                "File {} is outside {}",
-                path.display(),
-                content_dir.display()
-            ))?;
-            SitePath::try_from(relative.to_path_buf())
-        })
-        .collect::<Result<Vec<SitePath>, snafu::Whatever>>()?;
-    files.sort();
-    files.dedup();
-    Ok(files)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -198,14 +173,23 @@ mod tests {
         // Held to remove the temporary directory once the test ends
         _dir: tempfile::TempDir,
         roots: Roots,
+        layout: OutputLayout,
     }
 
     impl Site {
         fn new() -> Self {
+            Self::with_layout(OutputLayout::default())
+        }
+
+        fn with_layout(layout: OutputLayout) -> Self {
             let dir = tempfile::tempdir().unwrap();
             fs::create_dir(dir.path().join("src")).unwrap();
             let roots = Roots::new(dir.path().join("src"), dir.path().join("dist")).unwrap();
-            Self { roots, _dir: dir }
+            Self {
+                roots,
+                layout,
+                _dir: dir,
+            }
         }
 
         fn write(&self, relative: &str, content: &str) {
@@ -230,8 +214,16 @@ mod tests {
             &self,
             markdown_options: MarkdownParserOptions,
         ) -> Result<(), snafu::Whatever> {
-            SiteBuilder::new(self.roots.clone(), markdown_options).build()
+            SiteBuilder::new(self.roots.clone(), self.layout, markdown_options).build()
         }
+    }
+
+    /// The link a page points at, read out of an `href` attribute
+    fn href(page: &str) -> &str {
+        page.split("href=\"")
+            .nth(1)
+            .and_then(|rest| rest.split('"').next())
+            .unwrap_or_else(|| panic!("no link in page: {page}"))
     }
 
     #[test]
@@ -254,11 +246,11 @@ mod tests {
 
         site.build().unwrap();
 
-        let page = site.read("blog/post.html");
+        let page = site.read("blog/post/index.html");
         // Metadata is escaped, the parsed content is inserted as raw HTML
         assert!(page.contains("<h1>Hello &lt;b&gt;world&lt;/b&gt;</h1>"));
         assert!(page.contains("<p>body</p>"));
-        let page = site.read("blog/about.html");
+        let page = site.read("blog/about/index.html");
         assert!(page.contains("<h1>About &lt;i&gt;us&lt;/i&gt;</h1>"));
         // The HTML body passes through verbatim, without Markdown conversion
         assert!(page.contains("<p>raw *html*</p>"));
@@ -283,7 +275,7 @@ mod tests {
 
         site.build().unwrap();
 
-        let page = site.read("blog/post.html");
+        let page = site.read("blog/post/index.html");
         assert!(page.contains("<main>"));
         assert!(page.contains("<h1 id=\"body\">"));
     }
@@ -303,7 +295,7 @@ mod tests {
 
         site.build().unwrap();
 
-        let page = site.read("blog/post.html");
+        let page = site.read("blog/post/index.html");
         assert!(page.contains("<h1>Hello</h1>"));
         assert!(page.contains("<span>42</span>"));
         assert!(page.contains("<i>a</i><i>b</i>"));
@@ -320,6 +312,116 @@ mod tests {
         assert_eq!(site.read("blog/notes.md"), "# Just content\n");
         assert_eq!(site.read("blog/data.json"), r#"{"items": ["a"]}"#);
         assert!(!site.exists("blog/notes.html"));
+    }
+
+    #[test]
+    fn renders_flat_pages_when_clean_urls_are_off() {
+        let site = Site::with_layout(OutputLayout::new(false, false));
+        site.write("templates/post.html", "{{__content__}}");
+        site.write(
+            "root/blog/post.md",
+            "---\ntemplate: post.html\nvars: {}\n---\n# body\n",
+        );
+
+        site.build().unwrap();
+
+        assert!(site.read("blog/post.html").contains("<h1 id=\"body\">"));
+        assert!(!site.exists("blog/post/index.html"));
+    }
+
+    #[test]
+    fn keeps_index_and_404_pages_at_their_place_with_clean_urls() {
+        let site = Site::new();
+        site.write("templates/post.html", "{{__content__}}");
+        site.write(
+            "root/index.md",
+            "---\ntemplate: post.html\nvars: {}\n---\n# home\n",
+        );
+        site.write(
+            "root/blog/index.md",
+            "---\ntemplate: post.html\nvars: {}\n---\n# blog\n",
+        );
+        site.write(
+            "root/404.md",
+            "---\ntemplate: post.html\nvars: {}\n---\n# missing\n",
+        );
+
+        site.build().unwrap();
+
+        assert!(site.read("index.html").contains("<h1 id=\"home\">"));
+        assert!(site.read("blog/index.html").contains("<h1 id=\"blog\">"));
+        assert!(site.read("404.html").contains("<h1 id=\"missing\">"));
+        assert!(!site.exists("index/index.html"));
+        assert!(!site.exists("404/index.html"));
+    }
+
+    #[test]
+    fn fingerprints_assets_and_resolves_them_in_templates() {
+        let site = Site::with_layout(OutputLayout::new(true, true));
+        site.write(
+            "templates/post.html",
+            r#"<link rel="stylesheet" href="{{ asset(path="assets/style.css") }}">{{__content__}}"#,
+        );
+        site.write(
+            "root/blog/post.md",
+            "---\ntemplate: post.html\nvars: {}\n---\nbody\n",
+        );
+        site.write("root/assets/style.css", "body {}\n");
+
+        site.build().unwrap();
+
+        let page = site.read("blog/post/index.html");
+        let link = href(&page).to_string();
+        assert!(
+            link.starts_with("/assets/style."),
+            "unexpected link: {link}"
+        );
+        // The link and the file the build wrote carry the same name
+        let built = link.trim_start_matches('/');
+        assert_eq!(site.read(built), "body {}\n");
+    }
+
+    #[test]
+    fn keeps_asset_names_when_fingerprinting_is_off() {
+        let site = Site::new();
+        site.write(
+            "templates/post.html",
+            r#"<link href="{{ asset(path="assets/style.css") }}">"#,
+        );
+        site.write(
+            "root/blog/post.md",
+            "---\ntemplate: post.html\nvars: {}\n---\nbody\n",
+        );
+        site.write("root/assets/style.css", "body {}\n");
+
+        site.build().unwrap();
+
+        assert!(
+            site.read("blog/post/index.html")
+                .contains("/assets/style.css")
+        );
+        assert_eq!(site.read("assets/style.css"), "body {}\n");
+    }
+
+    #[test]
+    fn fails_on_an_asset_which_does_not_exist() {
+        let site = Site::new();
+        site.write(
+            "templates/post.html",
+            r#"<link href="{{ asset(path="assets/typo.css") }}">"#,
+        );
+        site.write(
+            "root/blog/post.md",
+            "---\ntemplate: post.html\nvars: {}\n---\nbody\n",
+        );
+
+        let error = format!("{}", Report::from_error(site.build().unwrap_err()));
+
+        assert!(error.contains("typo.css"), "unexpected error: {error}");
+        assert!(
+            error.contains("Could not render blog/post.md"),
+            "unexpected error: {error}"
+        );
     }
 
     #[test]
@@ -368,7 +470,7 @@ mod tests {
 
         site.build().unwrap();
 
-        let page = site.read("blog/post.html");
+        let page = site.read("blog/post/index.html");
         assert!(page.contains("<h1>Hello</h1>"));
         assert!(page.contains("<h1 id=\"heading\">Heading</h1>"));
         assert!(page.contains("<em>emphasis</em>"));
@@ -389,7 +491,7 @@ mod tests {
             .unwrap();
 
         assert!(
-            site.read("blog/post.html")
+            site.read("blog/post/index.html")
                 .contains("<!-- raw HTML omitted -->")
         );
     }
@@ -410,7 +512,10 @@ mod tests {
         );
 
         assert!(site.build().is_err());
-        assert!(site.read("blog/post.html").contains("<h1 id=\"body\">"));
+        assert!(
+            site.read("blog/post/index.html")
+                .contains("<h1 id=\"body\">")
+        );
 
         let mut staging = site.roots.out().as_os_str().to_os_string();
         staging.push(".staging");

@@ -1,5 +1,8 @@
 use snafu::prelude::*;
-use std::path::{Component, Path, PathBuf};
+use std::{
+    ffi::OsStr,
+    path::{Component, Path, PathBuf},
+};
 
 pub const COLLECTIONS_DIR: &str = "collections";
 pub const CONTENT_DIR: &str = "root";
@@ -101,9 +104,52 @@ impl SitePath {
         self.0.to_str().expect("SitePath is valid UTF-8")
     }
 
+    /// The extension of the file name, without the leading dot
+    ///
+    /// Construction guarantees UTF-8, so this never fails.
+    pub fn extension(&self) -> Option<&str> {
+        self.0.extension().and_then(OsStr::to_str)
+    }
+
+    /// The file name without its extension: `blog/post.md` gives `post`
+    ///
+    /// Construction guarantees a file name, so this never fails.
+    pub fn file_stem(&self) -> &str {
+        self.0
+            .file_stem()
+            .and_then(OsStr::to_str)
+            .expect("SitePath holds a file name")
+    }
+
     /// Change the extension of the underlying path
     pub fn with_extension(self, extension: &str) -> Self {
         Self(self.0.with_extension(extension))
+    }
+
+    /// Drop the extension: `blog/post.md` gives `blog/post`
+    pub fn without_extension(mut self) -> Self {
+        self.0.set_extension("");
+        self
+    }
+
+    /// Insert a content hash before the extension: `style.css` gives `style.<digest>.css`
+    pub fn with_hashed_name(mut self, digest: &str) -> Self {
+        let name = match self.extension() {
+            Some(extension) => format!("{}.{digest}.{extension}", self.file_stem()),
+            None => format!("{}.{digest}", self.as_str()),
+        };
+        self.0.set_file_name(name);
+        self
+    }
+
+    /// Join a child path, keeping the site-relative invariant
+    pub fn join(self, child: &str) -> Result<Self, snafu::Whatever> {
+        Self::try_from(self.0.join(child))
+    }
+
+    /// The absolute location of this path below a root
+    pub fn resolve(&self, root: &Path) -> PathBuf {
+        root.join(&self.0)
     }
 }
 
@@ -180,6 +226,62 @@ mod tests {
         assert_eq!(
             site_path("blog/post.md").unwrap().as_path(),
             Path::new("blog/post.md")
+        );
+    }
+
+    #[test]
+    fn reports_the_parts_of_a_file_name() {
+        let path = site_path("blog/post.md").unwrap();
+
+        assert_eq!(path.extension(), Some("md"));
+        assert_eq!(path.file_stem(), "post");
+
+        let path = site_path("assets/style").unwrap();
+        assert_eq!(path.extension(), None);
+        assert_eq!(path.file_stem(), "style");
+    }
+
+    #[test]
+    fn changes_the_extension_and_the_name() {
+        let path = site_path("blog/post.md").unwrap();
+        assert_eq!(
+            path.clone().with_extension("html").as_str(),
+            "blog/post.html"
+        );
+        assert_eq!(path.clone().without_extension().as_str(), "blog/post");
+        assert_eq!(
+            path.with_hashed_name("abc123").as_str(),
+            "blog/post.abc123.md"
+        );
+        assert_eq!(
+            site_path("assets/style.css")
+                .unwrap()
+                .with_hashed_name("abc123")
+                .as_str(),
+            "assets/style.abc123.css"
+        );
+    }
+
+    #[test]
+    fn joins_a_child_path() {
+        assert_eq!(
+            site_path("blog/post")
+                .unwrap()
+                .join("index.html")
+                .unwrap()
+                .as_str(),
+            "blog/post/index.html"
+        );
+        assert!(site_path("blog").unwrap().join("../secret").is_err());
+    }
+
+    #[test]
+    fn resolves_below_a_root() {
+        let path = site_path("blog/post.md").unwrap();
+
+        assert_eq!(
+            path.resolve(Path::new("/site/root")),
+            PathBuf::from("/site/root/blog/post.md")
         );
     }
 

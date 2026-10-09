@@ -4,6 +4,7 @@ use std::path::PathBuf;
 
 use crate::{
     build::{Builder, SiteBuilder},
+    output::OutputLayout,
     parsers::MarkdownParserOptions,
     path::Roots,
 };
@@ -12,6 +13,7 @@ mod build;
 mod content;
 mod dev;
 mod glob;
+mod output;
 mod parsers;
 mod path;
 mod templates;
@@ -26,48 +28,61 @@ struct Args {
 #[derive(Debug, Clone, Subcommand)]
 enum Command {
     Build {
-        /// Input path
-        #[arg(short, long, default_value = "src")]
-        base: PathBuf,
-        /// Output path
-        #[arg(short, long, default_value = "dist")]
-        out: PathBuf,
         #[command(flatten)]
-        markdown_args: MarkdownParserCliOptions,
+        options: BuildOptions,
     },
     Dev {
-        /// Input path
-        #[arg(short, long, default_value = "src")]
-        base: PathBuf,
-        /// Output path
-        #[arg(short, long, default_value = "dist")]
-        out: PathBuf,
         #[command(flatten)]
-        markdown_args: MarkdownParserCliOptions,
+        options: BuildOptions,
     },
     Init,
 }
 
 #[derive(Debug, Clone, Default, clap::Args)]
+struct BuildOptions {
+    /// Input path
+    #[arg(short, long, default_value = "src")]
+    base: PathBuf,
+    /// Output path
+    #[arg(short, long, default_value = "dist")]
+    out: PathBuf,
+    /// Generate pages next to their source (about.md -> about.html)
+    #[arg(long)]
+    no_clean_urls: bool,
+    /// Add a content hash to the name of css and js assets
+    #[arg(long)]
+    hash_assets: bool,
+    /// Markdown options
+    #[command(flatten)]
+    markdown_args: MarkdownParserCliOptions,
+}
+
+#[derive(Debug, Clone, Default, clap::Args)]
 struct MarkdownParserCliOptions {
     /// Do not add automatic id attributes to headings
-    #[arg(long)]
+    #[arg(long = "md-no-heading-ids")]
     no_heading_ids: bool,
     /// Omit raw HTML and unsafe links from the rendered Markdown
-    #[arg(long)]
+    #[arg(long = "md-no-raw-html")]
     no_raw_html: bool,
     /// Do not parse footnotes
-    #[arg(long)]
+    #[arg(long = "md-disable-footnote")]
     disable_footnotes: bool,
     /// Do not parse emoji shortcodes
-    #[arg(long)]
+    #[arg(long = "md-disable-emojis")]
     disable_emojis: bool,
     /// Do not parse diagram blocks
-    #[arg(long)]
+    #[arg(long = "md-disable-diagrams")]
     disable_diagrams: bool,
     /// Do not parse fenced div blocks
-    #[arg(long)]
+    #[arg(long = "md-disable-fenced-divs")]
     disable_fenced_divs: bool,
+}
+
+impl From<&BuildOptions> for OutputLayout {
+    fn from(options: &BuildOptions) -> Self {
+        Self::new(!options.no_clean_urls, options.hash_assets)
+    }
 }
 
 impl From<MarkdownParserCliOptions> for MarkdownParserOptions {
@@ -90,22 +105,17 @@ async fn main() -> Result<(), snafu::Whatever> {
 
     let args = Args::parse();
     match args.command {
-        Command::Build {
-            base,
-            out,
-            markdown_args,
-        } => {
-            let roots = Roots::new(base, out)?;
-            let builder = SiteBuilder::new(roots, markdown_args.into());
+        Command::Build { options } => {
+            let roots = Roots::new(options.base.clone(), options.out.clone())?;
+            let layout = OutputLayout::from(&options);
+            let builder = SiteBuilder::new(roots, layout, options.markdown_args.into());
             builder.build()?;
         }
-        Command::Dev {
-            base,
-            out,
-            markdown_args,
-        } => {
-            let roots = Roots::new(base, out)?;
-            let builder = SiteBuilder::new(roots.clone(), markdown_args.into());
+        Command::Dev { options } => {
+            let roots = Roots::new(options.base.clone(), options.out.clone())?;
+            let layout = OutputLayout::from(&options);
+            let builder =
+                SiteBuilder::new(roots.clone(), layout, options.markdown_args.clone().into());
             dev::serve_and_watch(roots, builder).await?;
         }
         Command::Init => {
@@ -194,6 +204,22 @@ Page not found
 mod tests {
     use super::*;
     use crate::parsers::{ContentParser, MarkdownParser};
+
+    #[test]
+    fn cli_flags_map_to_the_output_layout() {
+        let args = Args::parse_from(["enclume", "build"]);
+        let Command::Build { options } = args.command else {
+            panic!("expected a build command");
+        };
+        // Clean URLs are on, fingerprinting is off
+        assert_eq!(OutputLayout::from(&options), OutputLayout::new(true, false));
+
+        let args = Args::parse_from(["enclume", "build", "--no-clean-urls", "--hash-assets"]);
+        let Command::Build { options } = args.command else {
+            panic!("expected a build command");
+        };
+        assert_eq!(OutputLayout::from(&options), OutputLayout::new(false, true));
+    }
 
     #[test]
     fn cli_flags_map_to_markdown_options() {
