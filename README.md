@@ -40,7 +40,8 @@ All metadata is provided as yaml frontmatter, for example
 ```markdown
 ---
 template: "post.html"
-title: "This is a blog post"
+vars:
+  title: "This is a blog post"
 ---
 Some content
 ```
@@ -67,7 +68,7 @@ and the blog post template
 <!-- post.html -->
 {% extends "base.html" %}
 
-{% block title %}{{title}}{% endblock title %}
+{% block title %}{{vars.title}}{% endblock title %}
 
 {% block content %}
   {{__content__}}

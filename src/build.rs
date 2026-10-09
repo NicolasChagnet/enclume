@@ -238,15 +238,15 @@ mod tests {
         let site = Site::new();
         site.write(
             "templates/post.html",
-            "<h1>{{ title | default(value=\"\") }}</h1>{{__content__}}",
+            "<h1>{{ vars.title | default(value=\"\") }}</h1>{{__content__}}",
         );
         site.write(
             "root/blog/post.md",
-            "---\ntitle: Hello <b>world</b>\ntemplate: post.html\n---\nbody\n",
+            "---\ntemplate: post.html\nvars:\n  title: Hello <b>world</b>\n---\nbody\n",
         );
         site.write(
             "root/blog/about.html",
-            "---\ntitle: About <i>us</i>\ntemplate: post.html\n---\n<p>raw *html*</p>\n",
+            "---\ntemplate: post.html\nvars:\n  title: About <i>us</i>\n---\n<p>raw *html*</p>\n",
         );
         site.write("root/blog/other.html", "<p>no frontmatter</p>\n");
         site.write("root/assets/style.css", "body {}\n");
@@ -277,7 +277,7 @@ mod tests {
         site.write("templates/post.html", "{% include \"layout.html\" %}");
         site.write(
             "root/blog/post.md",
-            "---\ntitle: Hello\ntemplate: post.html\n---\n# body\n",
+            "---\ntemplate: post.html\nvars:\n  title: Hello\n---\n# body\n",
         );
 
         site.build().unwrap();
@@ -292,12 +292,12 @@ mod tests {
         let site = Site::new();
         site.write(
             "templates/post.html",
-            "<h1>{{ title }}</h1><span>{{ views }}</span>\
+            "<h1>{{ vars.title }}</h1><span>{{ vars.views }}</span>\
              {% for item in __content__.items %}<i>{{ item }}</i>{% endfor %}",
         );
         site.write(
             "root/blog/post.json",
-            "---\ntemplate: post.html\ntitle: Hello\nviews: 42\n---\n{\"items\": [\"a\", \"b\"]}",
+            "---\ntemplate: post.html\nvars:\n  title: Hello\n  views: 42\n---\n{\"items\": [\"a\", \"b\"]}",
         );
 
         site.build().unwrap();
@@ -324,7 +324,10 @@ mod tests {
     #[test]
     fn fails_on_a_content_file_without_a_template() {
         let site = Site::new();
-        site.write("root/blog/post.md", "---\ntitle: Hello\n---\n# body\n");
+        site.write(
+            "root/blog/post.md",
+            "---\nvars:\n  title: Hello\n---\n# body\n",
+        );
 
         let error = format!("{}", Report::from_error(site.build().unwrap_err()));
 
@@ -336,7 +339,10 @@ mod tests {
     fn fails_on_invalid_json_content() {
         let site = Site::new();
         site.write("templates/post.html", "{{__content__}}");
-        site.write("root/blog/post.json", "---\ntemplate: post.html\n---\n{");
+        site.write(
+            "root/blog/post.json",
+            "---\ntemplate: post.html\nvars: {}\n---\n{",
+        );
 
         let error = format!("{}", Report::from_error(site.build().unwrap_err()));
 
@@ -350,10 +356,13 @@ mod tests {
     #[test]
     fn renders_markdown_content_files() {
         let site = Site::new();
-        site.write("templates/post.html", "<h1>{{ title }}</h1>{{__content__}}");
+        site.write(
+            "templates/post.html",
+            "<h1>{{ vars.title }}</h1>{{__content__}}",
+        );
         site.write(
             "root/blog/post.md",
-            "---\ntitle: Hello\ntemplate: post.html\n---\n# Heading\n\nSome *emphasis* inside <b>HTML</b>.\n",
+            "---\ntemplate: post.html\nvars:\n  title: Hello\n---\n# Heading\n\nSome *emphasis* inside <b>HTML</b>.\n",
         );
 
         site.build().unwrap();
@@ -372,7 +381,7 @@ mod tests {
         site.write("templates/post.html", "{{__content__}}");
         site.write(
             "root/blog/post.md",
-            "---\ntitle: Hello\ntemplate: post.html\n---\nSome <b>HTML</b>.\n",
+            "---\ntemplate: post.html\nvars:\n  title: Hello\n---\nSome <b>HTML</b>.\n",
         );
 
         site.build_with(MarkdownParserOptions::default().with_raw_html(false))
@@ -390,13 +399,13 @@ mod tests {
         site.write("templates/post.html", "{{__content__}}");
         site.write(
             "root/blog/post.md",
-            "---\ntitle: Hello\ntemplate: post.html\n---\n# body\n",
+            "---\ntemplate: post.html\nvars:\n  title: Hello\n---\n# body\n",
         );
         site.build().unwrap();
 
         site.write(
             "root/blog/post.md",
-            "---\ntitle: [unclosed\ntemplate: post.html\n---\n# body\n",
+            "---\ntemplate: post.html\nvars:\n  title: [unclosed\n---\n# body\n",
         );
 
         assert!(site.build().is_err());

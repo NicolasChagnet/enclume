@@ -2,13 +2,10 @@ use std::path::Path;
 
 use snafu::prelude::*;
 
-use crate::{
-    parsers::{RawHtml, VAR_CONTENT, VarMap},
-    path::SitePath,
-};
+use crate::parsers::{ParsedData, RawHtml};
 
 pub trait Templater {
-    fn render(&self, template: &SitePath, values: VarMap) -> Result<RawHtml, snafu::Whatever>;
+    fn render(&self, data: ParsedData) -> Result<RawHtml, snafu::Whatever>;
 }
 
 #[derive(Debug, Clone)]
@@ -51,64 +48,72 @@ impl TeraTemplater {
 }
 
 impl Templater for TeraTemplater {
-    fn render(&self, template: &SitePath, values: VarMap) -> Result<RawHtml, snafu::Whatever> {
-        let context = convert_values_into_context(values)?;
+    fn render(&self, data: ParsedData) -> Result<RawHtml, snafu::Whatever> {
+        let template_name = data.template().as_str();
+        let values = data.as_value()?;
+        let mut context = tera::Context::from_serialize(&values)
+            .whatever_context("Couldn't convert into template context")?;
+        // The content holds an HTML fragment or structured data: never escape it
+        if let Some(content) = values["__content__"].as_str() {
+            context.insert_value("__content__", tera::Value::safe_string(content));
+        }
         let rendered = self
             .engine
-            .render(&template.to_string(), &context)
-            .with_whatever_context(|_| format!("Could not render {template}"))?;
+            .render(template_name, &context)
+            .with_whatever_context(|_| format!("Could not render {template_name}"))?;
         Ok(RawHtml::new(rendered))
     }
-}
-
-/// Convert the variable map into a Tera context
-///
-/// Values keep their JSON type so templates can read structured content. The
-/// content of a Markdown file is an HTML fragment, so it bypasses the escaping
-/// applied to every other string.
-fn convert_values_into_context(values: VarMap) -> Result<tera::Context, snafu::Whatever> {
-    let mut context = tera::Context::new();
-    for (key, value) in values {
-        let value = match (key.as_str(), value) {
-            (VAR_CONTENT, serde_json::Value::String(html)) => tera::Value::safe_string(&html),
-            (_, value) => {
-                tera::Value::try_from_serializable(&value).with_whatever_context(|_| {
-                    format!("Could not convert variable {key:?} for the template")
-                })?
-            }
-        };
-        context.insert_value(key, value);
-    }
-    Ok(context)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{parsers::VarMap, path::SitePath};
+    use std::path::PathBuf;
 
-    #[test]
-    fn keeps_json_value_types_in_the_context() {
-        let mut values = VarMap::new();
-        values.insert("views".to_string(), serde_json::json!(42));
-        values.insert("tags".to_string(), serde_json::json!(["a", "b"]));
-        values.insert(VAR_CONTENT.to_string(), serde_json::json!({"items": ["a"]}));
+    fn site_path(path: &str) -> SitePath {
+        SitePath::try_from(PathBuf::from(path)).unwrap()
+    }
 
-        let context = convert_values_into_context(values).unwrap();
-
-        assert!(context.get("views").unwrap().is_number());
-        assert!(context.get("tags").unwrap().is_array());
-        assert!(context.get(VAR_CONTENT).unwrap().is_map());
+    /// Templater which knows the `post.html` template
+    fn templater(template: &str) -> TeraTemplater {
+        let mut templater = TeraTemplater::new();
+        templater
+            .engine
+            .add_raw_template("post.html", template)
+            .unwrap();
+        templater
     }
 
     #[test]
-    fn marks_parsed_markdown_as_safe_html() {
-        let mut values = VarMap::new();
-        values.insert(VAR_CONTENT.to_string(), serde_json::json!("<p>body</p>"));
+    fn keeps_json_value_types_in_the_context() {
+        let mut vars = VarMap::new();
+        vars.insert("views".to_string(), serde_json::json!(42));
+        let data = ParsedData::new(site_path("post.html"), vars, serde_json::json!(null));
 
-        let context = convert_values_into_context(values).unwrap();
+        let rendered = templater("{{vars.views + 1}}").render(data).unwrap();
 
-        let content = context.get(VAR_CONTENT).unwrap();
-        assert!(content.is_safe());
-        assert_eq!(content.as_str(), Some("<p>body</p>"));
+        assert_eq!(rendered.inner(), "43");
+    }
+
+    #[test]
+    fn marks_parsed_content_as_safe_html() {
+        let mut vars = VarMap::new();
+        vars.insert("title".to_string(), serde_json::json!("Hello <b>world</b>"));
+        let data = ParsedData::new(
+            site_path("post.html"),
+            vars,
+            serde_json::json!("<p>body</p>"),
+        );
+
+        let rendered = templater("<h1>{{vars.title}}</h1>{{__content__}}")
+            .render(data)
+            .unwrap();
+
+        // Variables are escaped, the parsed content is inserted as raw HTML
+        assert_eq!(
+            rendered.inner(),
+            "<h1>Hello &lt;b&gt;world&lt;/b&gt;</h1><p>body</p>"
+        );
     }
 }

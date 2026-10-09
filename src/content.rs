@@ -1,5 +1,5 @@
 use crate::{
-    parsers::{ContentParser, ParsedMetadata, RawHtml},
+    parsers::{ContentParser, ParsedData, RawHtml},
     path::SitePath,
     templates::Templater,
 };
@@ -73,11 +73,11 @@ impl<'a> ContentSource<'a> {
 #[derive(Debug, Clone)]
 pub struct ContentParsed {
     original_file_path: SitePath,
-    metadata: ParsedMetadata,
+    metadata: ParsedData,
 }
 
 impl ContentParsed {
-    pub fn new(original_file_path: SitePath, metadata: ParsedMetadata) -> Self {
+    pub fn new(original_file_path: SitePath, metadata: ParsedData) -> Self {
         Self {
             original_file_path,
             metadata,
@@ -88,14 +88,13 @@ impl ContentParsed {
         &self.original_file_path
     }
 
-    pub fn metadata(&self) -> &ParsedMetadata {
+    pub fn metadata(&self) -> &ParsedData {
         &self.metadata
     }
 
-    /// Flatten the element into the variable map handed to templates
+    /// Render the content through the template it declares
     pub fn render<T: Templater>(self, templater: &T) -> Result<RenderedContent, snafu::Whatever> {
-        let (template, values) = self.metadata.into_attrs();
-        let rendered_content = templater.render(&template, values)?;
+        let rendered_content = templater.render(self.metadata)?;
         Ok(RenderedContent::new(rendered_content))
     }
 }
@@ -119,7 +118,7 @@ impl RenderedContent {
 
 #[cfg(test)]
 mod tests {
-    use crate::parsers::{MarkdownParser, VAR_CONTENT};
+    use crate::parsers::MarkdownParser;
 
     use super::*;
     use std::path::PathBuf;
@@ -162,21 +161,16 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(
             dir.path().join("post.md"),
-            "---\ntitle: hi\ntemplate: post.html\n---\nbody",
+            "---\ntemplate: post.html\nvars:\n  title: hi\n---\nbody",
         )
         .unwrap();
         let source = ContentSource::new(dir.path(), site_path("post.md"));
 
         let parsed = source.parse(&MarkdownParser::default()).unwrap().unwrap();
 
-        assert_eq!(
-            parsed.metadata().variables().get("title"),
-            Some(&serde_json::json!("hi"))
-        );
-        assert_eq!(
-            parsed.metadata().variables().get(VAR_CONTENT),
-            Some(&serde_json::json!("<p>body</p>\n"))
-        );
+        let value = parsed.metadata().as_value().unwrap();
+        assert_eq!(value["vars"]["title"], serde_json::json!("hi"));
+        assert_eq!(value["__content__"], serde_json::json!("<p>body</p>\n"));
         assert_eq!(
             parsed.metadata().template().as_path(),
             Path::new("post.html")

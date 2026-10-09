@@ -132,7 +132,7 @@ fn initialize_logging() -> Result<(), snafu::Whatever> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::parsers::{ContentParser, MarkdownParser, VAR_CONTENT};
+    use crate::parsers::{ContentParser, MarkdownParser};
 
     #[test]
     fn cli_flags_map_to_markdown_options() {
@@ -155,14 +155,11 @@ mod tests {
         }
         .into();
         let metadata = MarkdownParser::new(options)
-            .parse("---\ntemplate: post.html\n---\nHello :smile:\n")
+            .parse("---\ntemplate: post.html\nvars: {}\n---\nHello :smile:\n")
             .unwrap()
             .expect("expected frontmatter");
-        let content = metadata
-            .variables()
-            .get(VAR_CONTENT)
-            .and_then(|content| content.as_str())
-            .unwrap();
+        let value = metadata.as_value().unwrap();
+        let content = value["__content__"].as_str().unwrap();
         assert!(content.contains(":smile:"));
     }
 }

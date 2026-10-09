@@ -83,18 +83,22 @@ fn resolve_existing_prefix(path: &Path) -> PathBuf {
 
 /// A path relative to a site root
 ///
-/// Rejects absolute paths and `..`, so a content file name can never read or
-/// write outside its root.
+/// Guaranteed non-empty, valid UTF-8, and free of absolute and `..`
+/// components, so a content file name can never read or write outside its root
+/// and can always be used as text.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct SitePath(PathBuf);
 
 impl SitePath {
-    pub fn new(path: PathBuf) -> Self {
-        Self(path)
-    }
-
     pub fn as_path(&self) -> &Path {
         &self.0
+    }
+
+    /// The validated path as text
+    ///
+    /// Construction guarantees UTF-8, so this never fails.
+    pub fn as_str(&self) -> &str {
+        self.0.to_str().expect("SitePath is valid UTF-8")
     }
 
     /// Change the extension of the underlying path
@@ -107,12 +111,15 @@ impl TryFrom<PathBuf> for SitePath {
     type Error = snafu::Whatever;
 
     fn try_from(value: PathBuf) -> Result<Self, Self::Error> {
-        let valid = !value.as_os_str().is_empty()
+        let Some(text) = value.to_str() else {
+            whatever!("Path is not valid UTF-8: {}", value.display())
+        };
+        let valid = !text.is_empty()
             && value
                 .components()
                 .all(|component| matches!(component, Component::Normal(_)));
         if !valid {
-            whatever!("Not a site-relative path: {}", value.display());
+            whatever!("Not a site-relative path: {text}")
         }
         Ok(Self(value))
     }
@@ -120,7 +127,7 @@ impl TryFrom<PathBuf> for SitePath {
 
 impl std::fmt::Display for SitePath {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.0.to_string_lossy())
+        f.write_str(self.as_str())
     }
 }
 
@@ -174,5 +181,16 @@ mod tests {
             site_path("blog/post.md").unwrap().as_path(),
             Path::new("blog/post.md")
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn rejects_paths_which_are_not_valid_utf8() {
+        use std::ffi::OsStr;
+        use std::os::unix::ffi::OsStrExt;
+
+        let path = PathBuf::from(OsStr::from_bytes(b"blog/\xffpost.md"));
+
+        assert!(SitePath::try_from(path).is_err());
     }
 }
