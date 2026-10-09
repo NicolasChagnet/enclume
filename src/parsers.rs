@@ -286,6 +286,7 @@ impl ContentParser for MarkdownParser {
 /// JSON content parser
 ///
 /// Inserts the parsed JSON object inside the reserved `__content__` template variable.
+#[derive(Debug, Clone, Default)]
 pub struct JsonParser;
 
 impl ContentParser for JsonParser {
@@ -307,6 +308,7 @@ impl ContentParser for JsonParser {
 ///
 /// Inserts the body inside the reserved `__content__` template variable, without
 /// converting it.
+#[derive(Debug, Clone, Default)]
 pub struct HtmlParser;
 
 impl ContentParser for HtmlParser {

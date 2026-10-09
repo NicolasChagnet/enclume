@@ -56,8 +56,8 @@ impl SiteBuilder {
                 // Content files name their rendering template in their metadata
                 Ok(kind) => match kind {
                     ContentKind::Markdown => source.parse(&markdown_parser),
-                    ContentKind::Json => source.parse(&JsonParser),
-                    ContentKind::Html => source.parse(&HtmlParser),
+                    ContentKind::Json => source.parse(&JsonParser::default()),
+                    ContentKind::Html => source.parse(&HtmlParser::default()),
                 }
                 .with_whatever_context(|_| format!("Could not parse {file}"))?,
                 // Files without a known content kind have no metadata either
