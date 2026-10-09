@@ -11,6 +11,7 @@ use std::path::Path;
 pub enum ContentKind {
     Markdown,
     Json,
+    Html,
 }
 
 impl ContentKind {
@@ -18,6 +19,7 @@ impl ContentKind {
         let val = match extension {
             "md" => Self::Markdown,
             "json" => Self::Json,
+            "html" => Self::Html,
             _ => whatever!("Extension {:?} could not be parsed!", extension),
         };
         Ok(val)
@@ -141,6 +143,12 @@ mod tests {
                 .kind()
                 .unwrap(),
             ContentKind::Json
+        ));
+        assert!(matches!(
+            ContentSource::new(content_dir, site_path("blog/post.html"))
+                .kind()
+                .unwrap(),
+            ContentKind::Html
         ));
         assert!(
             ContentSource::new(content_dir, site_path("assets/style.css"))

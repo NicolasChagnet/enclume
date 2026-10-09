@@ -6,7 +6,7 @@ use snafu::prelude::*;
 use crate::{
     content::{ContentKind, ContentSource},
     glob::glob_files,
-    parsers::{JsonParser, MarkdownParser, MarkdownParserOptions},
+    parsers::{HtmlParser, JsonParser, MarkdownParser, MarkdownParserOptions},
     path::{Roots, SitePath},
     templates::TeraTemplater,
 };
@@ -57,6 +57,7 @@ impl SiteBuilder {
                 Ok(kind) => match kind {
                     ContentKind::Markdown => source.parse(&markdown_parser),
                     ContentKind::Json => source.parse(&JsonParser),
+                    ContentKind::Html => source.parse(&HtmlParser),
                 }
                 .with_whatever_context(|_| format!("Could not parse {file}"))?,
                 // Files without a known content kind have no metadata either
@@ -243,6 +244,10 @@ mod tests {
             "root/blog/post.md",
             "---\ntitle: Hello <b>world</b>\ntemplate: post.html\n---\nbody\n",
         );
+        site.write(
+            "root/blog/about.html",
+            "---\ntitle: About <i>us</i>\ntemplate: post.html\n---\n<p>raw *html*</p>\n",
+        );
         site.write("root/blog/other.html", "<p>no frontmatter</p>\n");
         site.write("root/assets/style.css", "body {}\n");
 
@@ -252,6 +257,10 @@ mod tests {
         // Metadata is escaped, the parsed content is inserted as raw HTML
         assert!(page.contains("<h1>Hello &lt;b&gt;world&lt;/b&gt;</h1>"));
         assert!(page.contains("<p>body</p>"));
+        let page = site.read("blog/about.html");
+        assert!(page.contains("<h1>About &lt;i&gt;us&lt;/i&gt;</h1>"));
+        // The HTML body passes through verbatim, without Markdown conversion
+        assert!(page.contains("<p>raw *html*</p>"));
         assert!(
             site.read("blog/other.html")
                 .contains("<p>no frontmatter</p>")

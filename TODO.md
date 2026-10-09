@@ -7,7 +7,7 @@ Core
   - [x] Markdown parsing
   - [x] JSON parsing
   - [  ] YAML parsing
-  - [  ] HTML parsing
+  - [x] HTML parsing
   - [x] Template layout rendering
 - [  ] Generate pages at predictable URLs
 - [x] Copy static assets

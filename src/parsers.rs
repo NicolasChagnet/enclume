@@ -277,6 +277,26 @@ impl ContentParser for JsonParser {
     }
 }
 
+/// HTML content parser
+///
+/// Inserts the body inside the [`VAR_CONTENT`] variable of the templating
+/// variables, without converting it.
+pub struct HtmlParser;
+
+impl ContentParser for HtmlParser {
+    fn parse(&self, content: &str) -> Result<Option<ParsedMetadata>, snafu::Whatever> {
+        let (frontmatter, body) = split_yaml_frontmatter(content);
+        if frontmatter.trim().is_empty() {
+            return Ok(None);
+        }
+        let mut var_map = parse_yaml_frontmatter(frontmatter)?;
+        let template = pop_template_from_metadata(&mut var_map)?;
+
+        var_map.insert(VAR_CONTENT.to_string(), body.into());
+        Ok(Some(ParsedMetadata::new(template, var_map)))
+    }
+}
+
 /// Splits a string into a yaml frontmatter part and the rest
 fn split_yaml_frontmatter(content: &str) -> (&str, &str) {
     // (?s) makes `.` match newlines. Group 1 is the yaml frontmatter body,
@@ -498,5 +518,29 @@ mod tests {
                 .parse("---\ntemplate: post.html\n---\n{")
                 .is_err()
         );
+    }
+
+    #[test]
+    fn parses_html_metadata_and_content() {
+        let input = "---\ntemplate: post.html\ntitle: hi\n---\n<h1>Raw</h1>\n";
+
+        let metadata = HtmlParser.parse(input).unwrap().unwrap();
+
+        assert_eq!(metadata.template().as_path(), PathBuf::from("post.html"));
+        assert_eq!(
+            metadata.variables().get("title"),
+            Some(&serde_json::json!("hi"))
+        );
+        assert_eq!(
+            metadata.variables().get(VAR_CONTENT),
+            Some(&serde_json::json!("<h1>Raw</h1>\n"))
+        );
+    }
+
+    #[test]
+    fn skips_html_without_frontmatter() {
+        let parsed = HtmlParser.parse("<p>no frontmatter</p>\n").unwrap();
+
+        assert!(parsed.is_none());
     }
 }
