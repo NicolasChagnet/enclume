@@ -17,7 +17,7 @@ Core
 
 Publishing
 - [  ] Support page metadata and canonical URLs
-- [  ] Support a custom 404 page
+- [x] Support a custom 404 page
 
 Workflow
 - [x] Provide a local development server
@@ -25,9 +25,9 @@ Workflow
 - [x] Init command creating basic structure
 
 Build
-- [  ] Quality actions
-- [  ] Release setup
-- [  ] Homebrew integration
+- [x] Quality actions
+- [x] Release setup
+- [x] Homebrew integration
 
 ## v1.1
 

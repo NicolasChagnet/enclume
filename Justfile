@@ -7,7 +7,8 @@ fmt:
 
 lint:
     @echo "Running linter..."
-    @cargo clippy
+    @cargo fmt --check
+    @cargo clippy -- -D warnings
 
 test:
     @echo "Running tests..."

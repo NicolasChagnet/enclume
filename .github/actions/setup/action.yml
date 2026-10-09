@@ -1,0 +1,31 @@
+name: Setup
+description: Install the Rust toolchain, just, cargo-nextest and restore the cargo cache.
+
+inputs:
+  targets:
+    description: Comma-separated rustup targets to add.
+    required: false
+    default: ""
+  components:
+    description: Comma-separated rustup components to add.
+    required: false
+    default: "rustfmt,clippy"
+
+runs:
+  using: composite
+  steps:
+    - name: Install Rust toolchain
+      uses: dtolnay/rust-toolchain@stable
+      with:
+        components: ${{ inputs.components }}
+        targets: ${{ inputs.targets }}
+
+    - name: Install just and cargo-nextest
+      uses: taiki-e/install-action@v2
+      with:
+        tool: just,nextest
+
+    - name: Cache cargo build
+      uses: Swatinem/rust-cache@v2
+      with:
+        cache-on-failure: true

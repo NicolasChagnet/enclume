@@ -6,7 +6,7 @@ I built Enclume after years of using [Astro](https://astro.build) for my persona
 
 ## Quickstart
 
-Enclume ships either as a single binary (here is [the latest release](TBD)) or can be installed from source (requires Rust installed)
+Enclume ships either as a single binary (here is [the latest release](https://github.com/NicolasChagnet/enclume/releases/latest)) or can be installed from source (requires Rust installed)
 
 ```sh
 cargo install enclume --locked
@@ -31,10 +31,11 @@ src/
 
 To generate the output static website, you can use
 ```sh
-enclume --base src --out dist
+enclume build --base src --out dist
 ```
+A `dev` command is also available which serves the built website on localhost and rebuilds when the source changes. 
 
-Content in `root/` is either parsed by one of the available parsers or copied as-is to the `dist/` directory. There are currently two parsers available: Markdown and Json.
+Content in `root/` is either parsed by one of the available parsers or copied as-is to the `dist/` directory. There are currently four parsers available: Markdown, HTML, YAML and Json.
 All metadata is provided as yaml frontmatter, for example
 
 ```markdown
@@ -76,3 +77,7 @@ and the blog post template
 ```
 
 The `__content__` is a reserved templating variable for the parsed Markdown HTML.
+
+## AI usage
+
+AI was mainly used for repetitive tasks and reviewing code. The design and core code is otherwise handwritten. This is NOT a vibecoded project.

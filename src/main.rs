@@ -17,7 +17,7 @@ mod path;
 mod templates;
 
 #[derive(Debug, Clone, Parser)]
-#[command(about = "A lightweight static site generator.", long_about = None)]
+#[command(about = "A lightweight static site generator.", long_about = None, version)]
 struct Args {
     #[command(subcommand)]
     command: Command,
