@@ -45,6 +45,7 @@ enum Command {
         #[command(flatten)]
         markdown_args: MarkdownParserCliOptions,
     },
+    Init,
 }
 
 #[derive(Debug, Clone, Default, clap::Args)]
@@ -107,6 +108,9 @@ async fn main() -> Result<(), snafu::Whatever> {
             let builder = SiteBuilder::new(roots.clone(), markdown_args.into());
             dev::serve_and_watch(roots, builder).await?;
         }
+        Command::Init => {
+            init_project()?;
+        }
     }
     Ok(())
 }
@@ -126,6 +130,63 @@ fn initialize_logging() -> Result<(), snafu::Whatever> {
         })
         .try_init()
         .whatever_context("Failed to initialize logging...")?;
+    Ok(())
+}
+
+/// Initializes a project structure at the current directory
+///
+/// Creates the following directories under `src/`
+/// ```text
+/// src/
+///    templates/
+///       layout.html
+///    root/
+///       index.md
+///       404.md
+/// ```
+fn init_project() -> Result<(), snafu::Whatever> {
+    std::fs::create_dir_all("./src/templates")
+        .whatever_context("Couldn't create `templates` directory")?;
+    std::fs::create_dir_all("./src/root").whatever_context("Couldn't create `root` directory")?;
+
+    std::fs::write(
+        "./src/templates/layout.html",
+        r#"
+<!DOCTYPE html>
+<html lang="en">
+    <head>
+        <title>{{ vars.title }}</title>
+    </head>
+    <body>
+        {{__content__}}
+    </body>
+</html>"#,
+    )
+    .whatever_context("Couldn't write layout.html template")?;
+
+    std::fs::write(
+        "./src/root/index.md",
+        r#"---
+template: layout.html
+vars:
+    title: Home
+---
+Hello, World!
+"#,
+    )
+    .whatever_context("Couldn't write index.md template")?;
+
+    std::fs::write(
+        "./src/root/404.md",
+        r#"---
+template: layout.html
+vars:
+    title: 404 Not Found
+---
+Page not found
+"#,
+    )
+    .whatever_context("Couldn't write 404.md template")?;
     Ok(())
 }
 

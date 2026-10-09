@@ -22,7 +22,7 @@ Publishing
 Workflow
 - [x] Provide a local development server
 - [x] Watch files and rebuild on changes
-- [  ] Init command creating basic structure
+- [x] Init command creating basic structure
 
 ## v1.1
 
