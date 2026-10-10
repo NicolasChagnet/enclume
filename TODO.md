@@ -36,7 +36,7 @@ Build
 
 Content
 - [  ] Reading time estimate (blog)
-- [  ] TOC
+- [x] TOC
 - [  ] Syntax highlighting
 - [x] Math markdown extension
 - [  ] Responsive images

@@ -350,22 +350,36 @@ impl ContentParser for MarkdownParser {
         if frontmatter.trim().is_empty() {
             return Ok(None);
         }
-        let raw_metadata = parse_yaml_frontmatter(frontmatter)?;
+        let mut raw_metadata = parse_yaml_frontmatter(frontmatter)?;
 
-        let parser = rushdown::new_markdown_to_html(
+        let parser = rushdown::parser::Parser::with_extensions(
             self.options.parser_options(),
-            self.options.renderer_options(),
             self.options
                 .parser_extensions()
                 .and(relative_links_extension(reference_base(path))),
+        );
+        let renderer = rushdown::renderer::html::Renderer::with_extensions(
+            self.options.renderer_options(),
             self.options.renderer_extensions(),
         );
 
+        // Parsing and rendering are two steps so the table of contents can be
+        // read from the document which is rendered
+        let mut reader = rushdown::text::BasicReader::new(body);
+        let (arena, document) = parser.parse(&mut reader);
+
         let mut parsed_body = String::new();
-        if let Err(e) = parser(&mut parsed_body, body) {
+        if let Err(e) = renderer.render(&mut parsed_body, body, &arena, document) {
             // rushdown::Error is not Send, so anyhow cannot keep it as a source
             whatever!("Could not parse Markdown content: {e}")
         }
+
+        let toc = rushdown_toc::table_of_contents(&arena, document, body);
+        raw_metadata.vars.get_or_insert_default().insert(
+            "toc".to_string(),
+            serde_json::to_value(toc).whatever_context("Could not build the table of contents")?,
+        );
+
         let parsed_data = ParsedData::from_raw(raw_metadata, parsed_body.into())?;
         Ok(Some(parsed_data))
     }
@@ -592,6 +606,27 @@ mod tests {
 
         assert!(content.contains("<h1"));
         assert!(content.contains("<em>emphasis</em>"));
+    }
+
+    #[test]
+    fn collects_headings_into_the_table_of_contents() {
+        let parsed = MarkdownParser::default()
+            .parse(
+                "---\ntemplate: post.html\n---\n# Title\n\n## Installing\n",
+                &post_path(),
+            )
+            .unwrap()
+            .unwrap();
+
+        let value = parsed.as_value().unwrap();
+
+        assert_eq!(
+            value["vars"]["toc"],
+            serde_json::json!([
+                { "level": 1, "id": "title", "title": "Title" },
+                { "level": 2, "id": "installing", "title": "Installing" },
+            ])
+        );
     }
 
     #[test]

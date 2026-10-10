@@ -382,6 +382,7 @@ dependencies = [
  "rushdown-footnote",
  "rushdown-math",
  "rushdown-relative-links",
+ "rushdown-toc",
  "serde",
  "serde_json",
  "snafu",
@@ -1178,6 +1179,14 @@ name = "rushdown-relative-links"
 version = "0.1.0"
 dependencies = [
  "rushdown",
+]
+
+[[package]]
+name = "rushdown-toc"
+version = "0.1.0"
+dependencies = [
+ "rushdown",
+ "serde",
 ]
 
 [[package]]

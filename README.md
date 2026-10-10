@@ -105,6 +105,24 @@ A template cannot read the filesystem, but it can list the pages the build parse
 
 Each entry holds `path` (the source file), `url` (where it is served, clean URLs included) and `vars` (everything the file declared under `vars`). A file which declares no metadata is copied verbatim and is never a page. An invalid pattern fails the build rather than rendering an empty list.
 
+## Table of contents
+
+The headings of a Markdown page are collected into a `toc` variable passed to the template
+
+```html
+{% if vars.toc %}
+<nav class="toc">
+    <ul>
+    {% for heading in vars.toc %}
+        <li class="level-{{ heading.level }}"><a href="#{{ heading.id }}">{{ heading.title }}</a></li>
+    {% endfor %}
+    </ul>
+</nav>
+{% endif %}
+```
+
+Each entry holds the `level` of its heading (1 for `#`, 2 for `##`, and so on), the `id` a link to it ends with, and the `title` of the heading with its inline markup flattened: emphasis, strong, links and code spans read as the prose they hold. A heading which carries no id is left out of the list, so `--md-no-heading-ids` also leaves the table of contents empty.
+
 ## Math
 
 Markdown content can hold LaTeX formulas. They are typeset while the site is built, by a Rust port of [KaTeX](https://katex.org), into the markup KaTeX itself produces: HTML, plus a MathML copy of every formula for screen readers and for text selection. No JavaScript runs in the browser.
