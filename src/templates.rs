@@ -35,7 +35,7 @@ impl TeraTemplater {
 
     /// Register every template in `template_dir`, keyed by its path relative to it
     pub fn load_templates(&mut self, template_dir: &Path) -> Result<(), snafu::Whatever> {
-        let templates = glob_relative(template_dir, "**/*.html")?;
+        let templates = glob_relative(template_dir, "**/*.html", None)?;
         let files = templates
             .into_iter()
             .map(|file| {

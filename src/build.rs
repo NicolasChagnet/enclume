@@ -16,6 +16,12 @@ use crate::{
     templates::TeraTemplater,
 };
 
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum BuildMode {
+    Prod,
+    Dev,
+}
+
 pub trait Builder {
     /// Build the site from `base` into `out`
     ///
@@ -31,6 +37,7 @@ pub struct SiteBuilder {
     roots: Roots,
     layout: OutputLayout,
     markdown_options: MarkdownParserOptions,
+    mode: BuildMode,
 }
 
 impl SiteBuilder {
@@ -38,11 +45,13 @@ impl SiteBuilder {
         roots: Roots,
         layout: OutputLayout,
         markdown_options: MarkdownParserOptions,
+        mode: BuildMode,
     ) -> Self {
         Self {
             roots,
             layout,
             markdown_options,
+            mode,
         }
     }
 
@@ -51,7 +60,11 @@ impl SiteBuilder {
         reset_dir(out)?;
 
         let roots = &self.roots;
-        let files = glob_relative(&roots.content_dir(), "**/*")?;
+        let draft_pattern = match self.mode {
+            BuildMode::Prod => Some(".draft"),
+            BuildMode::Dev => None,
+        };
+        let files = glob_relative(&roots.content_dir(), "**/*", draft_pattern)?;
 
         // Fingerprint the assets first: templates link to them while they render
         // Wrap in Arc for the templater so 'assets' can be used within the template functions
@@ -197,6 +210,7 @@ mod tests {
         _dir: tempfile::TempDir,
         roots: Roots,
         layout: OutputLayout,
+        mode: BuildMode,
     }
 
     impl Site {
@@ -211,8 +225,15 @@ mod tests {
             Self {
                 roots,
                 layout,
+                mode: BuildMode::Prod,
                 _dir: dir,
             }
+        }
+
+        /// Build the way `enclume dev` does
+        fn with_mode(mut self, mode: BuildMode) -> Self {
+            self.mode = mode;
+            self
         }
 
         fn write(&self, relative: &str, content: &str) {
@@ -237,7 +258,7 @@ mod tests {
             &self,
             markdown_options: MarkdownParserOptions,
         ) -> Result<(), snafu::Whatever> {
-            SiteBuilder::new(self.roots.clone(), self.layout, markdown_options).build()
+            SiteBuilder::new(self.roots.clone(), self.layout, markdown_options, self.mode).build()
         }
     }
 
@@ -335,6 +356,47 @@ mod tests {
         assert_eq!(site.read("blog/notes.md"), "# Just content\n");
         assert_eq!(site.read("blog/data.json"), r#"{"items": ["a"]}"#);
         assert!(!site.exists("blog/notes.html"));
+    }
+
+    #[test]
+    fn omits_draft_files_in_production_builds() {
+        let site = Site::new();
+        site.write("templates/post.html", "{{__content__}}");
+        site.write(
+            "root/blog/post.md",
+            "---\ntemplate: post.html\nvars: {}\n---\n# published\n",
+        );
+        site.write(
+            "root/blog/post.draft.md",
+            "---\ntemplate: post.html\nvars: {}\n---\n# unpublished\n",
+        );
+        site.write("root/assets/notes.draft.txt", "wip\n");
+
+        site.build().unwrap();
+
+        assert!(site.read("blog/post/index.html").contains("published"));
+        assert!(!site.exists("blog/post.draft/index.html"));
+        assert!(!site.exists("blog/post.draft.md"));
+        assert!(!site.exists("assets/notes.draft.txt"));
+    }
+
+    #[test]
+    fn keeps_draft_files_in_development_builds() {
+        let site = Site::new().with_mode(BuildMode::Dev);
+        site.write("templates/post.html", "{{__content__}}");
+        site.write(
+            "root/blog/post.draft.md",
+            "---\ntemplate: post.html\nvars: {}\n---\n# unpublished\n",
+        );
+        site.write("root/assets/notes.draft.txt", "wip\n");
+
+        site.build().unwrap();
+
+        assert!(
+            site.read("blog/post.draft/index.html")
+                .contains("unpublished")
+        );
+        assert_eq!(site.read("assets/notes.draft.txt"), "wip\n");
     }
 
     #[test]

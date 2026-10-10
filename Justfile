@@ -19,5 +19,8 @@ ci: lint test
 build profile:
     @cargo build --profile={{profile}}
 
+install profile:
+    @cargo install --profile={{profile}} --path .
+
 run:
     @cargo run

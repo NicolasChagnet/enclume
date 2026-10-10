@@ -3,7 +3,7 @@ use snafu::prelude::*;
 use std::path::PathBuf;
 
 use crate::{
-    build::{Builder, SiteBuilder},
+    build::{BuildMode, Builder, SiteBuilder},
     output::OutputLayout,
     parsers::MarkdownParserOptions,
     path::Roots,
@@ -109,14 +109,19 @@ async fn main() -> Result<(), snafu::Whatever> {
         Command::Build { options } => {
             let roots = Roots::new(options.base.clone(), options.out.clone())?;
             let layout = OutputLayout::from(&options);
-            let builder = SiteBuilder::new(roots, layout, options.markdown_args.into());
+            let builder =
+                SiteBuilder::new(roots, layout, options.markdown_args.into(), BuildMode::Prod);
             builder.build()?;
         }
         Command::Dev { options } => {
             let roots = Roots::new(options.base.clone(), options.out.clone())?;
             let layout = OutputLayout::from(&options);
-            let builder =
-                SiteBuilder::new(roots.clone(), layout, options.markdown_args.clone().into());
+            let builder = SiteBuilder::new(
+                roots.clone(),
+                layout,
+                options.markdown_args.clone().into(),
+                BuildMode::Dev,
+            );
             dev::serve_and_watch(roots, builder).await?;
         }
         Command::Init => {
