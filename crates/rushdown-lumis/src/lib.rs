@@ -65,16 +65,23 @@
 //! as `true`:
 //!
 //! ```text
-//! rust line_numbers highlight_lines=3,7-9
+//! rust line_numbers highlight_lines=3,7-9 title="src/main.rs"
 //! ```
 //!
 //! - `line_numbers` adds the gutter of line numbers, which count from one;
 //! - `highlight_lines=3,7-9` marks lines, which the theme draws in the colour
-//!   it gives to `highlighted`.
+//!   it gives to `highlighted`;
+//! - `title="src/main.rs"` writes the title bar of the block, a
+//!   `<figure class="lumis-figure">` which holds the title in a
+//!   `<figcaption class="lumis-title">` and then the block itself. The page
+//!   styles the bar, since no theme holds its colours.
 //!
 //! [`Options::with_line_numbers`] and [`Options::with_italic`] set a site-wide
-//! default for a page whose blocks mostly want the same. A block has no title
-//! bar and no frame: a site which wants one wraps the block in its own markup.
+//! default for a page whose blocks mostly want the same, and
+//! [`Options::with_highlights`] names the scope every token was highlighted as
+//! — `keyword`, `comment`, `function.call` — in the `data-highlight` attribute
+//! of its `<span>`, for a page which styles those names itself. A block has no
+//! frame: a site which wants one wraps the block in its own markup.
 //!
 //! # Languages
 //!
@@ -100,7 +107,7 @@ use rushdown::renderer::{
 };
 
 pub use lumis::languages::Language;
-pub use lumis::themes::{Appearance, Theme};
+pub use lumis::themes::{Appearance, Theme, get as get_theme};
 
 /// Options for the lumis HTML renderer
 ///
@@ -114,6 +121,7 @@ pub struct Options {
     themes: Vec<Theme>,
     line_numbers: bool,
     italic: bool,
+    highlights: bool,
 }
 
 impl Options {
@@ -123,6 +131,7 @@ impl Options {
             themes: vec![theme],
             line_numbers: false,
             italic: false,
+            highlights: false,
         }
     }
 
@@ -146,6 +155,18 @@ impl Options {
         self
     }
 
+    /// Names the highlight scope of every token, beside the colour of the
+    /// theme
+    ///
+    /// Every token is a `<span>` which holds the name of the scope it was
+    /// highlighted as, such as `keyword`, `comment`, or `function.call`, in
+    /// its `data-highlight` attribute. A page which styles those names itself
+    /// asks for them; a page which does not pays for them in every block.
+    pub fn with_highlights(mut self, highlights: bool) -> Self {
+        self.highlights = highlights;
+        self
+    }
+
     /// The theme of every block, and the theme of the other appearance
     pub(crate) fn themes(&self) -> &[Theme] {
         &self.themes
@@ -159,6 +180,11 @@ impl Options {
     /// Whether the italic of a theme is written
     pub(crate) fn italic(&self) -> bool {
         self.italic
+    }
+
+    /// Whether the scope of every token is written beside its colour
+    pub(crate) fn highlights(&self) -> bool {
+        self.highlights
     }
 }
 

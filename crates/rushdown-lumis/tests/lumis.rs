@@ -105,6 +105,29 @@ fn escapes_the_code() {
 }
 
 #[test]
+fn writes_the_title_bar_of_a_block_which_has_one() {
+    let html = render("```rust title=\"src/main.rs\"\nfn main() {}\n```\n");
+
+    assert!(
+        html.starts_with(
+            r#"<figure class="lumis-figure"><figcaption class="lumis-title">src/main.rs</figcaption><pre class="lumis""#
+        ),
+        "the title bar holds the title and then the block: {html}"
+    );
+    assert!(html.ends_with("</pre></figure>"), "{html}");
+}
+
+#[test]
+fn escapes_the_title_of_a_block() {
+    let html = render("```rust title=\"a <b> & c\"\nfn main() {}\n```\n");
+
+    assert!(
+        html.contains(">a &lt;b&gt; &amp; c</figcaption>"),
+        "the title is escaped: {html}"
+    );
+}
+
+#[test]
 fn numbers_the_lines_of_a_block_which_asks_for_it() {
     let html = render("```rust line_numbers\n// a comment\nlet answer = 42;\n```\n");
 
@@ -139,6 +162,23 @@ fn marks_the_lines_a_block_asks_for() {
 }
 
 #[test]
+fn names_the_scope_of_every_token_when_the_options_ask_for_it() {
+    let html = render_with(
+        options().with_highlights(true),
+        "```rust\nlet answer = 42;\n```\n",
+    );
+
+    assert!(
+        html.contains(r#"<span data-highlight="keyword" style="color: #cba6f7;">let</span>"#),
+        "a token names the scope it was highlighted as: {html}"
+    );
+    assert!(
+        !render("```rust\nlet answer = 42;\n```\n").contains("data-highlight"),
+        "a page which does not ask for the names does not pay for them"
+    );
+}
+
+#[test]
 fn writes_italic_only_when_the_options_ask_for_it() {
     let plain = render("```rust\n// a comment\n```\n");
     let italic = render_with(options().with_italic(true), "```rust\n// a comment\n```\n");
@@ -165,6 +205,22 @@ fn writes_the_two_themes_of_a_page_read_in_both() {
         html.contains(r#"<span style="color: light-dark(#8839ef, #cba6f7);">let</span>"#),
         "the two themes are the two sides of light-dark(): {html}"
     );
+}
+
+#[test]
+fn writes_the_title_bar_of_a_block_written_in_both_themes() {
+    let html = render_with(
+        options().with_theme(theme(LIGHT)),
+        "```rust title=\"src/main.rs\"\nlet answer = 42;\n```\n",
+    );
+
+    assert!(
+        html.starts_with(
+            r#"<figure class="lumis-figure"><figcaption class="lumis-title">src/main.rs</figcaption><pre class="lumis lumis-themes dark light""#
+        ),
+        "{html}"
+    );
+    assert!(html.ends_with("</pre></figure>"), "{html}");
 }
 
 #[test]

@@ -513,6 +513,7 @@ dependencies = [
  "rushdown-emoji",
  "rushdown-fenced-div",
  "rushdown-footnote",
+ "rushdown-lumis",
  "rushdown-math",
  "rushdown-relative-links",
  "rushdown-toc",

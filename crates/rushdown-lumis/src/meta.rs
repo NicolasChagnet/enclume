@@ -118,6 +118,17 @@ impl MetaOptions {
         })
     }
 
+    /// The title the last `title` option gives the block
+    ///
+    /// The title is written as a word, so that a name holding spaces is
+    /// written between quotes. A `title` which holds no name gives none.
+    pub(crate) fn title(&self) -> Option<&str> {
+        self.last("title").and_then(|value| match value {
+            Value::Word(word) if !word.is_empty() => Some(word.as_str()),
+            Value::Flag(_) | Value::Word(_) => None,
+        })
+    }
+
     /// The lines the last `highlight_lines` option marks
     ///
     /// The lines are written as numbers and ranges of numbers, separated by
@@ -317,6 +328,16 @@ mod tests {
             entries(r#"{1,3-5} ins={2} /foo bar/ theme=nord"#),
             [word("theme", "nord")]
         );
+    }
+
+    #[test]
+    fn reads_the_title_of_a_block() {
+        assert_eq!(
+            MetaOptions::parse(r#"title='my file.rs' line_numbers"#).title(),
+            Some("my file.rs")
+        );
+        assert_eq!(MetaOptions::parse("line_numbers theme=nord").title(), None);
+        assert_eq!(MetaOptions::parse(r#"title="""#).title(), None);
     }
 
     #[test]

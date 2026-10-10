@@ -37,7 +37,7 @@ Build
 Content
 - [  ] Reading time estimate (blog)
 - [x] TOC
-- [  ] Syntax highlighting
+- [x] Syntax highlighting
 - [x] Math markdown extension
 - [  ] Responsive images
 - [  ] Generate sitemap.xml

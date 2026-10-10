@@ -1,6 +1,7 @@
 use crate::path::SitePath;
 use rushdown::{parser::ParserExtension, renderer::html::RendererExtension};
-use rushdown_math::{math_html_renderer_extension, math_parser_extension};
+use rushdown_lumis::lumis_html_renderer_extension;
+use rushdown_math::math_html_renderer_extension;
 use rushdown_relative_links::relative_links_extension;
 use serde::{Deserialize, Serialize};
 use snafu::prelude::*;
@@ -165,11 +166,14 @@ impl Parsers {
     }
 }
 
+const DEFAULT_LIGHT_THEME: &str = "catppuccin_latte";
+const DEFAULT_DARK_THEME: &str = "catppuccin_macchiato";
+
 /// Feature switches for the Markdown parser and HTML renderer
 ///
 /// Every syntax extension is enabled by default, and raw HTML written in
 /// Markdown passes through unless it is explicitly disabled.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub struct MarkdownParserOptions {
     auto_heading_ids: bool,
     allow_raw_html: bool,
@@ -178,6 +182,10 @@ pub struct MarkdownParserOptions {
     enable_diagrams: bool,
     enable_fenced_divs: bool,
     enable_math: bool,
+    enable_syntax_highlighting: bool,
+    code_light_theme: String,
+    code_dark_theme: String,
+    code_line_numbers: bool,
 }
 
 impl Default for MarkdownParserOptions {
@@ -190,6 +198,10 @@ impl Default for MarkdownParserOptions {
             enable_diagrams: true,
             enable_fenced_divs: true,
             enable_math: true,
+            enable_syntax_highlighting: true,
+            code_light_theme: DEFAULT_LIGHT_THEME.to_string(),
+            code_dark_theme: DEFAULT_DARK_THEME.to_string(),
+            code_line_numbers: true,
         }
     }
 }
@@ -235,6 +247,25 @@ impl MarkdownParserOptions {
         self
     }
 
+    pub fn with_syntax_highlighting(mut self, enabled: bool) -> Self {
+        self.enable_syntax_highlighting = enabled;
+        self
+    }
+    pub fn with_code_light_theme(mut self, theme: String) -> Self {
+        self.code_light_theme = theme;
+        self
+    }
+
+    pub fn with_code_dark_theme(mut self, theme: String) -> Self {
+        self.code_dark_theme = theme;
+        self
+    }
+
+    pub fn with_code_line_numbers(mut self, enabled: bool) -> Self {
+        self.code_line_numbers = enabled;
+        self
+    }
+
     /// Translate these options into rushdown parser options
     pub fn parser_options(&self) -> rushdown::parser::Options {
         rushdown::parser::Options {
@@ -253,8 +284,7 @@ impl MarkdownParserOptions {
 
     /// Assemble the parser extension holding every enabled syntax extension
     pub fn parser_extensions(&self) -> impl rushdown::parser::ParserExtension {
-        let options = *self;
-
+        let options = self.clone();
         rushdown::parser::empty_parser_extension().and(rushdown::parser::parser_extension(
             move |parser| {
                 rushdown::parser::gfm(rushdown::parser::GfmOptions::default()).apply(parser);
@@ -282,7 +312,7 @@ impl MarkdownParserOptions {
                 }
 
                 if options.enable_math {
-                    math_parser_extension().apply(parser);
+                    rushdown_math::math_parser_extension().apply(parser);
                 }
             },
         ))
@@ -290,7 +320,7 @@ impl MarkdownParserOptions {
 
     /// Assemble the renderer extension holding every enabled syntax extension
     pub fn renderer_extensions(&self) -> impl rushdown::renderer::html::RendererExtension<'_> {
-        let options = *self;
+        let options = self.clone();
 
         rushdown::renderer::html::empty_renderer_extension().and(
             rushdown::renderer::html::renderer_extension(move |renderer| {
@@ -324,6 +354,25 @@ impl MarkdownParserOptions {
 
                 if options.enable_math {
                     math_html_renderer_extension().apply(renderer);
+                }
+
+                if options.enable_syntax_highlighting {
+                    let light_theme = rushdown_lumis::get_theme(&options.code_light_theme)
+                        .unwrap_or_else(|_| {
+                            log::warn!("Couldn't find theme {}", options.code_light_theme);
+                            rushdown_lumis::get_theme(DEFAULT_LIGHT_THEME).unwrap()
+                        });
+                    let dark_theme = rushdown_lumis::get_theme(&options.code_dark_theme)
+                        .unwrap_or_else(|_| {
+                            log::warn!("Couldn't find theme {}", options.code_dark_theme);
+                            rushdown_lumis::get_theme(DEFAULT_DARK_THEME).unwrap()
+                        });
+                    lumis_html_renderer_extension(
+                        rushdown_lumis::Options::new(light_theme)
+                            .with_theme(dark_theme)
+                            .with_line_numbers(options.code_line_numbers),
+                    )
+                    .apply(renderer);
                 }
             }),
         )

@@ -103,7 +103,7 @@ impl SiteBuilder {
         roots: &Roots,
         files: Vec<SitePath>,
     ) -> Result<Vec<(ContentFile, Option<ParsedContent>)>, snafu::Whatever> {
-        let parsers = Parsers::new(self.markdown_options);
+        let parsers = Parsers::new(self.markdown_options.clone());
         files
             .into_par_iter()
             .map(|path| {

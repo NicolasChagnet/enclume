@@ -4,13 +4,17 @@
 //! are `<span>` elements styled inline from the theme, with the colours of the
 //! theme on the block itself, the gutter of line numbers in the colour the
 //! theme gives to `line_number`, and a marked line in the colour it gives to
-//! `highlighted`.
+//! `highlighted`. A block with a title is written inside the title bar of the
+//! page — a `<figure>` holding the `<figcaption>` of the title — and a block
+//! whose options ask for it names the scope of every token in the
+//! `data-highlight` attribute of its `<span>`.
 
 use std::{any::TypeId, collections::HashMap, io, marker::PhantomData, str::FromStr};
 
 use lumis::{
     HtmlInlineBuilder, HtmlMultiThemesBuilder,
     formatter::html_inline::{HighlightLines, HighlightLinesStyle},
+    html::{HtmlElement, escape},
     write_highlight,
 };
 use rushdown::{
@@ -29,6 +33,7 @@ use crate::{
 /// What a code block asks for, once its fence has been read
 struct Block<'a> {
     language: Language,
+    title: Option<&'a str>,
     line_numbers: bool,
     highlight_lines: Option<HighlightLines>,
     code: &'a str,
@@ -42,6 +47,7 @@ fn render_block(options: &Options, language: &str, meta: &MetaOptions, code: &st
     let marked = meta.highlight_lines();
     let block = Block {
         language: Language::from_str(language).unwrap_or(Language::PlainText),
+        title: meta.title(),
         line_numbers: meta.flag("line_numbers").unwrap_or(options.line_numbers()),
         highlight_lines: (!marked.is_empty()).then_some(HighlightLines {
             lines: marked,
@@ -80,7 +86,9 @@ fn write_block(options: &Options, block: &Block<'_>, output: &mut Vec<u8>) -> io
                 .default_theme("light-dark()")
                 .italic(options.italic())
                 .line_numbers(block.line_numbers)
-                .highlight_lines(block.highlight_lines.clone());
+                .include_highlights(options.highlights())
+                .highlight_lines(block.highlight_lines.clone())
+                .header(block.title.map(title_bar));
 
             let formatter = builder.build().map_err(io::Error::other)?;
             write_highlight(output, block.code, formatter)
@@ -92,7 +100,9 @@ fn write_block(options: &Options, block: &Block<'_>, output: &mut Vec<u8>) -> io
                 .theme(themes.first().cloned())
                 .italic(options.italic())
                 .line_numbers(block.line_numbers)
-                .highlight_lines(block.highlight_lines.clone());
+                .include_highlights(options.highlights())
+                .highlight_lines(block.highlight_lines.clone())
+                .header(block.title.map(title_bar));
 
             let formatter = builder.build().map_err(io::Error::other)?;
             write_highlight(output, block.code, formatter)
@@ -108,10 +118,26 @@ fn write_plain(options: &Options, block: &Block<'_>, output: &mut Vec<u8>) -> io
         .theme(options.themes().first().cloned())
         .italic(options.italic())
         .line_numbers(block.line_numbers)
-        .highlight_lines(block.highlight_lines.clone());
+        .include_highlights(options.highlights())
+        .highlight_lines(block.highlight_lines.clone())
+        .header(block.title.map(title_bar));
 
     let formatter = builder.build().map_err(io::Error::other)?;
     write_highlight(output, block.code, formatter)
+}
+
+/// The title bar of a block which has a title
+///
+/// lumis writes the bar around the block as it writes the block, so the title
+/// is escaped here, before the bar holds it.
+fn title_bar(title: &str) -> HtmlElement {
+    HtmlElement {
+        open_tag: format!(
+            r#"<figure class="lumis-figure"><figcaption class="lumis-title">{}</figcaption>"#,
+            escape(title)
+        ),
+        close_tag: "</figure>".to_string(),
+    }
 }
 
 /// The name a theme carries as a side of `light-dark()`
