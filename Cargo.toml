@@ -1,5 +1,6 @@
 [workspace]
 members = [
+    "crates/rushdown-lumis",
     "crates/rushdown-math",
     "crates/rushdown-relative-links",
     "crates/rushdown-toc",

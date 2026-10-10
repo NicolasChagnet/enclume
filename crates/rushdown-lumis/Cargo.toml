@@ -1,0 +1,48 @@
+[package]
+name = "rushdown-lumis"
+version = "0.1.0"
+edition = "2024"
+description = "Highlight the code blocks of a rushdown document with lumis."
+license = "MIT"
+repository = "https://github.com/NicolasChagnet/enclume"
+
+[features]
+default = []
+# Every language lumis knows, which is a long build: one parser is compiled
+# per language. Turn on the ones a site needs instead, either here or by
+# depending on lumis itself, whose features are additive.
+all-languages = ["lumis/all-languages"]
+backend = ["lumis/lang-bundle-backend"]
+config-files = [
+    "lumis/lang-caddy",
+    "lumis/lang-dockerfile",
+    "lumis/lang-gitignore",
+    "lumis/lang-ini",
+    "lumis/lang-just",
+    "lumis/lang-make",
+    "lumis/lang-nginx",
+    "lumis/lang-toml",
+    "lumis/lang-yaml",
+]
+web = ["lumis/lang-bundle-web", "lumis/lang-bundle-web-extra"]
+
+[dependencies]
+lumis = { version = "0.17.1", default-features = false, features = [
+    "lang-bash",
+    "lang-c",
+    "lang-cpp",
+    "lang-css",
+    "lang-diff",
+    "lang-go",
+    "lang-html",
+    "lang-javascript",
+    "lang-json",
+    "lang-markdown",
+    "lang-python",
+    "lang-rust",
+    "lang-sql",
+    "lang-toml",
+    "lang-typescript",
+    "lang-yaml",
+] }
+rushdown = { workspace = true }
