@@ -105,6 +105,26 @@ A template cannot read the filesystem, but it can list the pages the build parse
 
 Each entry holds `path` (the source file), `url` (where it is served, clean URLs included) and `vars` (everything the file declared under `vars`). A file which declares no metadata is copied verbatim and is never a page. An invalid pattern fails the build rather than rendering an empty list.
 
+## Math
+
+Markdown content can hold LaTeX formulas. They are typeset while the site is built, by a Rust port of [KaTeX](https://katex.org), into the markup KaTeX itself produces: HTML, plus a MathML copy of every formula for screen readers and for text selection. No JavaScript runs in the browser.
+
+````markdown
+Inline math is written between single dollars, like $E = mc^2$.
+
+Display math is written between double dollars, on a line of its own:
+
+$$
+\int_0^1 x \, dx = \frac{1}{2}
+$$
+
+or as a `math` block:
+
+```math
+\int_0^1 x \, dx = \frac{1}{2}
+```
+````
+
 ## AI usage
 
 AI was mainly used for repetitive tasks and reviewing code. The design and core code is otherwise handwritten. This is NOT a vibecoded project.

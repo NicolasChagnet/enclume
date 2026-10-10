@@ -78,6 +78,9 @@ struct MarkdownParserCliOptions {
     /// Do not parse fenced div blocks
     #[arg(long = "md-disable-fenced-divs")]
     disable_fenced_divs: bool,
+    /// Do not parse math formulas
+    #[arg(long = "md-disable-math")]
+    disable_math: bool,
 }
 
 impl From<&BuildOptions> for OutputLayout {
@@ -95,6 +98,7 @@ impl From<MarkdownParserCliOptions> for MarkdownParserOptions {
             .with_emojis(!value.disable_emojis)
             .with_diagrams(!value.disable_diagrams)
             .with_fenced_divs(!value.disable_fenced_divs)
+            .with_math(!value.disable_math)
     }
 }
 

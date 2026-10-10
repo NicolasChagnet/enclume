@@ -1,0 +1,11 @@
+[package]
+name = "rushdown-math"
+version = "0.1.0"
+edition = "2024"
+description = "Render LaTeX math in rushdown documents as KaTeX markup."
+license = "MIT"
+repository = "https://github.com/NicolasChagnet/enclume"
+
+[dependencies]
+katex-rs = "0.3"
+rushdown = { workspace = true }

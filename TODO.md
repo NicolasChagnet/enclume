@@ -20,7 +20,7 @@ Core
 Publishing
 - [x] Support page metadata and canonical URLs
 - [x] Support a custom 404 page
-- [  ] Drafts: keep draft posts out of listings and out of the built output
+- [x] Drafts: keep draft posts out of listings and out of the built output
 
 Workflow
 - [x] Provide a local development server
@@ -38,7 +38,7 @@ Content
 - [  ] Reading time estimate (blog)
 - [  ] TOC
 - [  ] Syntax highlighting
-- [  ] Math markdown extension
+- [x] Math markdown extension
 - [  ] Responsive images
 - [  ] Generate sitemap.xml
 - [  ] Generate RSS or Atom feed

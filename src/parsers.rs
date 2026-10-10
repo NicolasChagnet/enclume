@@ -1,5 +1,6 @@
 use crate::path::SitePath;
 use rushdown::{parser::ParserExtension, renderer::html::RendererExtension};
+use rushdown_math::{math_html_renderer_extension, math_parser_extension};
 use rushdown_relative_links::relative_links_extension;
 use serde::{Deserialize, Serialize};
 use snafu::prelude::*;
@@ -176,6 +177,7 @@ pub struct MarkdownParserOptions {
     enable_emojis: bool,
     enable_diagrams: bool,
     enable_fenced_divs: bool,
+    enable_math: bool,
 }
 
 impl Default for MarkdownParserOptions {
@@ -187,6 +189,7 @@ impl Default for MarkdownParserOptions {
             enable_emojis: true,
             enable_diagrams: true,
             enable_fenced_divs: true,
+            enable_math: true,
         }
     }
 }
@@ -224,6 +227,11 @@ impl MarkdownParserOptions {
 
     pub fn with_fenced_divs(mut self, enabled: bool) -> Self {
         self.enable_fenced_divs = enabled;
+        self
+    }
+
+    pub fn with_math(mut self, enabled: bool) -> Self {
+        self.enable_math = enabled;
         self
     }
 
@@ -272,6 +280,10 @@ impl MarkdownParserOptions {
                 if options.enable_fenced_divs {
                     rushdown_fenced_div::fenced_div_parser_extension().apply(parser);
                 }
+
+                if options.enable_math {
+                    math_parser_extension().apply(parser);
+                }
             },
         ))
     }
@@ -308,6 +320,10 @@ impl MarkdownParserOptions {
                         rushdown_fenced_div::FencedDivHtmlRendererOptions,
                     )
                     .apply(renderer);
+                }
+
+                if options.enable_math {
+                    math_html_renderer_extension().apply(renderer);
                 }
             }),
         )
@@ -618,6 +634,44 @@ mod tests {
             markdown,
         );
         assert!(literal.contains(":smile:"));
+    }
+
+    #[test]
+    fn renders_math_when_enabled() {
+        let markdown = concat!(
+            "---\ntemplate: post.html\nvars: {}\n---\n",
+            "Energy is $E = mc^2$.\n\n",
+            "$$\n\\int_0^1 x\\,dx\n$$\n\n",
+            "```math\nx^2\n```\n",
+        );
+
+        let rendered = rendered_markdown(&MarkdownParser::default(), markdown);
+
+        assert!(
+            rendered.contains(r#"<span class="math math-inline"><span class="katex">"#),
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains(r#"<span class="math math-display"><span class="katex-display">"#),
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains(r#"<div class="math math-display"><span class="katex-display">"#),
+            "{rendered}"
+        );
+    }
+
+    #[test]
+    fn disables_math_when_requested() {
+        let markdown = "---\ntemplate: post.html\nvars: {}\n---\nEnergy is $E = mc^2$.\n";
+
+        let rendered = rendered_markdown(
+            &MarkdownParser::new(MarkdownParserOptions::default().with_math(false)),
+            markdown,
+        );
+
+        assert!(!rendered.contains("katex"), "{rendered}");
+        assert!(rendered.contains("$E = mc^2$"), "{rendered}");
     }
 
     #[test]
