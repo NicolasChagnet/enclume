@@ -80,7 +80,7 @@ pub fn match_files(pattern: &str, files: &[SitePath]) -> Result<Vec<SitePath>, s
 }
 
 /// Expand `{a,b}` alternatives into separate patterns
-fn expand_braces(pattern: &str) -> Vec<String> {
+pub(crate) fn expand_braces(pattern: &str) -> Vec<String> {
     let Some(open) = pattern.find('{') else {
         return vec![pattern.to_string()];
     };

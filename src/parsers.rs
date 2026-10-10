@@ -79,6 +79,11 @@ impl ParsedData {
         &self.template
     }
 
+    /// The variables the file declared under `vars`
+    pub fn vars(&self) -> &VarMap {
+        &self.vars
+    }
+
     pub fn as_value(&self) -> Result<Value, snafu::Whatever> {
         let var =
             serde_json::to_value(self).whatever_context("Could not build template parameters")?;
@@ -121,7 +126,10 @@ pub trait ContentParser {
     ///
     /// Returns `None` when the content declares no frontmatter, which marks the
     /// file for a verbatim copy instead of a rendering pass.
-    fn parse(&self, content: &str) -> Result<Option<ParsedData>, snafu::Whatever>;
+    ///
+    /// `path` locates the file below the content root, which Markdown needs to
+    /// resolve its relative references.
+    fn parse(&self, content: &str, path: &SitePath) -> Result<Option<ParsedData>, snafu::Whatever>;
 }
 
 /// The parsers the build dispatches to, by content kind
@@ -320,7 +328,7 @@ impl MarkdownParser {
 }
 
 impl ContentParser for MarkdownParser {
-    fn parse(&self, content: &str) -> Result<Option<ParsedData>, snafu::Whatever> {
+    fn parse(&self, content: &str, path: &SitePath) -> Result<Option<ParsedData>, snafu::Whatever> {
         let (frontmatter, body) = split_yaml_frontmatter(content);
         if frontmatter.trim().is_empty() {
             return Ok(None);
@@ -330,7 +338,9 @@ impl ContentParser for MarkdownParser {
         let parser = rushdown::new_markdown_to_html(
             self.options.parser_options(),
             self.options.renderer_options(),
-            self.options.parser_extensions(),
+            self.options
+                .parser_extensions()
+                .and(rebase_extension(reference_base(path))),
             self.options.renderer_extensions(),
         );
 
@@ -351,7 +361,11 @@ impl ContentParser for MarkdownParser {
 pub struct JsonParser;
 
 impl ContentParser for JsonParser {
-    fn parse(&self, content: &str) -> Result<Option<ParsedData>, snafu::Whatever> {
+    fn parse(
+        &self,
+        content: &str,
+        _path: &SitePath,
+    ) -> Result<Option<ParsedData>, snafu::Whatever> {
         let (frontmatter, body) = split_yaml_frontmatter(content);
         if frontmatter.trim().is_empty() {
             return Ok(None);
@@ -373,7 +387,11 @@ impl ContentParser for JsonParser {
 pub struct HtmlParser;
 
 impl ContentParser for HtmlParser {
-    fn parse(&self, content: &str) -> Result<Option<ParsedData>, snafu::Whatever> {
+    fn parse(
+        &self,
+        content: &str,
+        _path: &SitePath,
+    ) -> Result<Option<ParsedData>, snafu::Whatever> {
         let (frontmatter, body) = split_yaml_frontmatter(content);
         if frontmatter.trim().is_empty() {
             return Ok(None);
@@ -391,7 +409,11 @@ impl ContentParser for HtmlParser {
 pub struct YamlParser;
 
 impl ContentParser for YamlParser {
-    fn parse(&self, content: &str) -> Result<Option<ParsedData>, snafu::Whatever> {
+    fn parse(
+        &self,
+        content: &str,
+        _path: &SitePath,
+    ) -> Result<Option<ParsedData>, snafu::Whatever> {
         let (frontmatter, body) = split_yaml_frontmatter(content);
         // We expect there to NOT be a frontmatter here
         if !frontmatter.trim().is_empty() {
@@ -401,6 +423,178 @@ impl ContentParser for YamlParser {
         let parsed_data = ParsedData::from_raw(raw_metadata, "".into())?;
         Ok(Some(parsed_data))
     }
+}
+
+/// The URL directory the relative references of `path` resolve against
+///
+/// Assets keep their source-relative path in the output, so a reference sitting
+/// next to `blog/post.md` is served from `/blog/`, whatever the layout does with
+/// the page's own URL.
+fn reference_base(path: &SitePath) -> String {
+    match path.as_path().parent() {
+        Some(parent) if !parent.as_os_str().is_empty() => {
+            format!("/{}", parent.to_string_lossy())
+        }
+        _ => String::new(),
+    }
+}
+
+/// Options of the extension resolving a file's relative references
+#[derive(Debug, Clone)]
+struct RebasingOptions {
+    /// The URL directory the file's relative references resolve against
+    base: String,
+}
+
+/// Rewrites the relative image destinations of a file to root-relative ones
+///
+/// A page is served at `/blog/post` without a trailing slash, so a browser
+/// resolves `plot.png` against `/blog/` while the asset sits at `/blog/post/`.
+/// Astro avoided this by rewriting every image to a hashed absolute URL; this
+/// keeps the file name and makes the reference root-relative, which is correct
+/// under both `/blog/post` and `/blog/post/`.
+#[derive(Debug)]
+struct RebasingImages {
+    base: String,
+}
+
+impl rushdown::parser::ParserOptions for RebasingOptions {}
+
+impl RebasingImages {
+    fn with_options(options: RebasingOptions) -> Self {
+        Self { base: options.base }
+    }
+}
+
+impl rushdown::parser::AstTransformer for RebasingImages {
+    fn transform(
+        &self,
+        arena: &mut rushdown::ast::Arena,
+        document: rushdown::ast::NodeRef,
+        reader: &mut rushdown::text::BasicReader,
+        _context: &mut rushdown::parser::Context,
+    ) {
+        use rushdown::text::Reader as _;
+
+        let source = reader.source();
+        let mut rewrites: Vec<(rushdown::ast::NodeRef, String)> = Vec::new();
+        let _ = rushdown::ast::walk(
+            arena,
+            document,
+            &mut |arena: &rushdown::ast::Arena,
+                  node_ref: rushdown::ast::NodeRef,
+                  entering: bool| {
+                if entering && rushdown::matches_kind!(arena[node_ref], Image) {
+                    let image = rushdown::as_kind_data!(arena[node_ref], Image);
+                    if let Some(destination) =
+                        rebase_destination(&self.base, image.destination_str(source))
+                    {
+                        rewrites.push((node_ref, destination));
+                    }
+                }
+                Ok::<rushdown::ast::WalkStatus, std::convert::Infallible>(
+                    rushdown::ast::WalkStatus::Continue,
+                )
+            },
+        );
+
+        for (node_ref, destination) in rewrites {
+            let rushdown::ast::KindData::Image(image) = arena[node_ref].kind_data_mut() else {
+                continue;
+            };
+            let title = image.title().cloned();
+            let rebuilt = match image.link_kind() {
+                rushdown::ast::LinkKind::Reference(reference) => {
+                    let value = reference.value().clone();
+                    let kind = reference.link_reference_kind();
+                    match title {
+                        Some(title) => rushdown::ast::Image::reference_with_title(
+                            destination,
+                            value,
+                            kind,
+                            title,
+                        ),
+                        None => rushdown::ast::Image::reference(destination, value, kind),
+                    }
+                }
+                _ => match title {
+                    Some(title) => rushdown::ast::Image::inline_with_title(destination, title),
+                    None => rushdown::ast::Image::inline(destination),
+                },
+            };
+            *image = rebuilt;
+        }
+    }
+}
+
+impl From<RebasingImages> for rushdown::parser::AnyAstTransformer {
+    fn from(transformer: RebasingImages) -> Self {
+        rushdown::parser::AnyAstTransformer::Extension(Box::new(transformer))
+    }
+}
+
+/// Returns a parser extension resolving the relative references of one file
+///
+/// The base directory is per file, so the extension is built per parse instead of
+/// living in [`MarkdownParserOptions`].
+fn rebase_extension(base: String) -> impl rushdown::parser::ParserExtension {
+    /// Runs after the syntax extensions, on a complete document
+    const PRIORITY: u32 = 1000;
+
+    rushdown::parser::parser_extension(move |parser| {
+        parser.add_ast_transformer(
+            RebasingImages::with_options,
+            RebasingOptions { base: base.clone() },
+            PRIORITY,
+        );
+    })
+}
+
+/// Resolve a relative destination against the directory of the file it is written in
+///
+/// Returns `None` for the destinations the build must leave alone: empty,
+/// root-relative, protocol-relative, fragment-only, or carrying a scheme
+/// (`https:`, `mailto:`, `data:`, …).
+fn rebase_destination(base: &str, destination: &str) -> Option<String> {
+    if destination.is_empty()
+        || destination.starts_with('/')
+        || destination.starts_with('#')
+        || destination.starts_with('?')
+        || has_scheme(destination)
+    {
+        return None;
+    }
+    let joined = match base.is_empty() {
+        true => format!("/{destination}"),
+        false => format!("{base}/{destination}"),
+    };
+    Some(normalize_destination(&joined))
+}
+
+/// Whether a destination opens with a URL scheme, which makes it absolute
+fn has_scheme(destination: &str) -> bool {
+    let Some((scheme, _)) = destination.split_once(':') else {
+        return false;
+    };
+    scheme.starts_with(|c: char| c.is_ascii_alphabetic())
+        && scheme
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.'))
+}
+
+/// Resolve `.` and `..` segments, keeping the result root-relative
+fn normalize_destination(destination: &str) -> String {
+    let mut segments: Vec<&str> = Vec::new();
+    for segment in destination.split('/') {
+        match segment {
+            "" | "." => {}
+            ".." => {
+                segments.pop();
+            }
+            segment => segments.push(segment),
+        }
+    }
+    format!("/{}", segments.join("/"))
 }
 
 /// Splits a string into a yaml frontmatter part and the rest
@@ -429,12 +623,16 @@ fn parse_yaml_frontmatter(frontmatter: &str) -> Result<RawMetadata, snafu::Whate
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn post_path() -> SitePath {
+        SitePath::try_from(PathBuf::from("blog/post/index.md")).unwrap()
+    }
     use std::path::PathBuf;
 
     /// Rendered body of a Markdown string which declares a template
     fn rendered_markdown(parser: &MarkdownParser, markdown: &str) -> String {
         let metadata = parser
-            .parse(markdown)
+            .parse(markdown, &post_path())
             .unwrap()
             .expect("expected frontmatter");
         metadata.as_value().unwrap()["__content__"]
@@ -459,7 +657,9 @@ mod tests {
 
     #[test]
     fn skips_markdown_without_frontmatter() {
-        let parsed = MarkdownParser::default().parse("# Just content\n").unwrap();
+        let parsed = MarkdownParser::default()
+            .parse("# Just content\n", &post_path())
+            .unwrap();
 
         assert!(parsed.is_none());
     }
@@ -475,7 +675,10 @@ mod tests {
     #[test]
     fn parses_frontmatter_into_metadata_and_content() {
         let metadata = MarkdownParser::default()
-            .parse("---\ntemplate: post.html\nvars:\n  title: hi\n---\nbody")
+            .parse(
+                "---\ntemplate: post.html\nvars:\n  title: hi\n---\nbody",
+                &post_path(),
+            )
             .unwrap()
             .unwrap();
 
@@ -492,7 +695,7 @@ mod tests {
         let error = format!(
             "{:#}",
             MarkdownParser::default()
-                .parse("---\nvars:\n  title: hi\n---\nbody")
+                .parse("---\nvars:\n  title: hi\n---\nbody", &post_path())
                 .unwrap_err()
         );
 
@@ -504,7 +707,10 @@ mod tests {
         let error = format!(
             "{:#}",
             MarkdownParser::default()
-                .parse("---\ntemplate: ../post.html\nvars: {}\n---\nbody")
+                .parse(
+                    "---\ntemplate: ../post.html\nvars: {}\n---\nbody",
+                    &post_path()
+                )
                 .unwrap_err()
         );
 
@@ -576,7 +782,7 @@ mod tests {
         let input =
             "---\ntemplate: post.html\nvars:\n  title: hi\n  views: 42\n---\n{\"items\": [\"a\"]}";
 
-        let metadata = JsonParser.parse(input).unwrap().unwrap();
+        let metadata = JsonParser.parse(input, &post_path()).unwrap().unwrap();
 
         assert_eq!(metadata.template().as_path(), PathBuf::from("post.html"));
         let value = metadata.as_value().unwrap();
@@ -587,7 +793,9 @@ mod tests {
 
     #[test]
     fn skips_json_without_frontmatter() {
-        let parsed = JsonParser.parse(r#"{"items": ["a"]}"#).unwrap();
+        let parsed = JsonParser
+            .parse(r#"{"items": ["a"]}"#, &post_path())
+            .unwrap();
 
         assert!(parsed.is_none());
     }
@@ -596,7 +804,7 @@ mod tests {
     fn rejects_content_without_a_frontmatter_body() {
         assert!(
             JsonParser
-                .parse("---\ntemplate: post.html\nvars: {}\n---\n")
+                .parse("---\ntemplate: post.html\nvars: {}\n---\n", &post_path())
                 .is_err()
         );
     }
@@ -605,7 +813,7 @@ mod tests {
     fn rejects_invalid_json() {
         assert!(
             JsonParser
-                .parse("---\ntemplate: post.html\nvars: {}\n---\n{")
+                .parse("---\ntemplate: post.html\nvars: {}\n---\n{", &post_path())
                 .is_err()
         );
     }
@@ -614,7 +822,7 @@ mod tests {
     fn parses_html_metadata_and_content() {
         let input = "---\ntemplate: post.html\nvars:\n  title: hi\n---\n<h1>Raw</h1>\n";
 
-        let metadata = HtmlParser.parse(input).unwrap().unwrap();
+        let metadata = HtmlParser.parse(input, &post_path()).unwrap().unwrap();
 
         assert_eq!(metadata.template().as_path(), PathBuf::from("post.html"));
         let value = metadata.as_value().unwrap();
@@ -623,8 +831,96 @@ mod tests {
     }
 
     #[test]
+    fn resolves_relative_destinations_against_the_directory_of_the_file() {
+        // Assets keep their source-relative path, so they sit next to the content
+        assert_eq!(
+            rebase_destination("/blog/post", "plot.png").unwrap(),
+            "/blog/post/plot.png"
+        );
+        assert_eq!(
+            rebase_destination("/blog/post", "./plot.png").unwrap(),
+            "/blog/post/plot.png"
+        );
+        assert_eq!(
+            rebase_destination("/blog", "post/plot.png").unwrap(),
+            "/blog/post/plot.png"
+        );
+        // A file beside the content root resolves to the root
+        assert_eq!(rebase_destination("", "plot.png").unwrap(), "/plot.png");
+        // `..` walks back up and cannot escape the root
+        assert_eq!(
+            rebase_destination("/blog/a/b", "../plot.png").unwrap(),
+            "/blog/a/plot.png"
+        );
+        assert_eq!(
+            rebase_destination("/blog", "../../plot.png").unwrap(),
+            "/plot.png"
+        );
+    }
+
+    #[test]
+    fn leaves_destinations_the_browser_resolves_alone() {
+        for destination in [
+            "/blog/post/plot.png",          // already root-relative
+            "https://example.com/plot.png", // absolute
+            "http://example.com/plot.png",
+            "//example.com/plot.png", // protocol-relative
+            "mailto:someone@example.com",
+            "data:image/png;base64,AAAA",
+            "tel:+31000000000",
+            "#section",
+            "?query=1",
+            "",
+        ] {
+            assert!(
+                rebase_destination("/blog/post", destination).is_none(),
+                "{destination} should be left alone"
+            );
+        }
+    }
+
+    #[test]
+    fn rewrites_relative_image_destinations_when_parsing_markdown() {
+        let parsed = MarkdownParser::default()
+            .parse(
+                "---\ntemplate: post.html\n---\n![plot](plot.png)\n",
+                &post_path(),
+            )
+            .unwrap()
+            .unwrap();
+
+        let value = parsed.as_value().unwrap();
+        let content = value["__content__"].as_str().unwrap();
+        assert!(
+            content.contains(r#"src="/blog/post/plot.png""#),
+            "unexpected content: {content}"
+        );
+    }
+
+    #[test]
+    fn leaves_absolute_and_remote_images_untouched_in_markdown() {
+        let parsed = MarkdownParser::default()
+            .parse(
+                "---\ntemplate: post.html\n---\n![a](/blog/plot.png) ![b](https://example.com/plot.png)\n",
+                &post_path(),
+            )
+            .unwrap()
+            .unwrap();
+
+        let value = parsed.as_value().unwrap();
+        let content = value["__content__"].as_str().unwrap();
+        assert!(content.contains(r#"src="/blog/plot.png""#), "{content}");
+        assert!(
+            content.contains(r#"src="https://example.com/plot.png""#),
+            "{content}"
+        );
+    }
+
+    #[test]
     fn skips_html_without_frontmatter() {
-        let parsed = HtmlParser.parse("<p>no frontmatter</p>\n").unwrap();
+        let parsed = HtmlParser
+            .parse("<p>no frontmatter</p>\n", &post_path())
+            .unwrap();
 
         assert!(parsed.is_none());
     }

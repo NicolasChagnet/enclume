@@ -76,9 +76,34 @@ and the blog post template
 {% endblock content %}
 ```
 
-The `__content__` is a reserved templating variable for the parsed Markdown HTML.
+The `__content__` is a reserved templating variable for the parsed Markdown HTML. `__url__` is the other reserved variable: the URL the page itself is served at, for canonical links and for a listing which must skip its own entry.
 
 Pages are built with clean URLs by default: `about.md` becomes `about/index.html`. Pass `--no-clean-urls` to build `about.html` instead. Pass `--hash-assets` to add a content hash to the name of every css and js file (`style.css` becomes `style.<hash>.css`), which `asset()` resolves.
+
+A relative reference in Markdown resolves against the directory of the file it is written in:
+
+```markdown
+![Periodogram](periodogram.png)
+```
+
+so `blog/post/index.md` links to `/blog/post/periodogram.png`, where the asset is copied. This matters because a page is served at `/blog/post` without a trailing slash, and a browser would otherwise resolve the reference against `/blog/`. References written in raw HTML are passed through verbatim, so those must be root-relative (`/blog/post/periodogram.png`) or absolute.
+
+## Listing other pages
+
+A template cannot read the filesystem, but it can list the pages the build parsed. The `pages()` function takes a glob pattern, relative to `root/` and with the same `{a,b}` alternatives as the file patterns, and returns the matching pages in source-path order:
+
+```html
+<!-- blog-list.html -->
+<ul>
+{% for post in pages(pattern="blog/**/*.md") %}
+    {% if post.url != __url__ %}
+    <li><a href="{{ post.url }}">{{ post.vars.title }}</a> ({{ post.vars.publishDate }})</li>
+    {% endif %}
+{% endfor %}
+</ul>
+```
+
+Each entry holds `path` (the source file), `url` (where it is served, clean URLs included) and `vars` (everything the file declared under `vars`). A file which declares no metadata is copied verbatim and is never a page. An invalid pattern fails the build rather than rendering an empty list.
 
 ## AI usage
 

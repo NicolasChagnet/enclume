@@ -7,9 +7,10 @@ use rayon::prelude::*;
 use snafu::prelude::*;
 
 use crate::{
-    content::{Content, ContentFile},
+    content::{Content, ContentFile, ParsedContent},
     glob::glob_relative,
     output::{Assets, Output, OutputLayout},
+    pages::Pages,
     parsers::{MarkdownParserOptions, Parsers},
     path::{Roots, SitePath},
     templates::TeraTemplater,
@@ -57,28 +58,50 @@ impl SiteBuilder {
         let assets = Arc::new(scan_assets(roots, &files, &self.layout)?);
         let output = Output::new(out, &self.layout, &assets);
 
-        let mut templater = TeraTemplater::new(Arc::clone(&assets));
+        // Parsing runs first, so the `pages()` template function can list every page
+        // while the templates render. Then each file is written: the ones declaring
+        // metadata through their template, the rest copied verbatim.
+
+        let parsed = self.parse_all(roots, files)?;
+        let pages = Arc::new(Pages::collect(
+            parsed.iter().filter_map(|(_, parsed)| parsed.as_ref()),
+            &self.layout,
+        )?);
+
+        let mut templater = TeraTemplater::new(Arc::clone(&assets), Arc::clone(&pages));
         templater.load_templates(&roots.templates_dir())?;
-        let parsers = Parsers::new(self.markdown_options);
 
-        // Loop over every file inside the input directory
-        files.into_par_iter().try_for_each(|path| {
-            let file = ContentFile::locate(roots, path)?;
-            log::debug!("Handling {file}");
-
-            let parsed = file
-                .parse(&parsers)
-                .with_whatever_context(|_| format!("Could not parse {file}"))?;
-
-            match parsed {
-                // Files which declare no metadata are copied verbatim
-                None => file.write(&output),
-                Some(parsed) => parsed
-                    .render(&templater)
-                    .with_whatever_context(|_| format!("Could not render {file}"))?
-                    .write(&output),
-            }
+        parsed.into_par_iter().try_for_each(|(file, parsed)| {
+            // Files which declare no metadata are copied verbatim
+            let Some(parsed) = parsed else {
+                return file.write(&output);
+            };
+            let url = self.layout.page_url(parsed.path())?;
+            parsed
+                .render(&templater, &url)
+                .with_whatever_context(|_| format!("Could not render {file}"))?
+                .write(&output)
         })
+    }
+
+    /// Read and parse every content file, keeping the ones to copy verbatim
+    fn parse_all(
+        &self,
+        roots: &Roots,
+        files: Vec<SitePath>,
+    ) -> Result<Vec<(ContentFile, Option<ParsedContent>)>, snafu::Whatever> {
+        let parsers = Parsers::new(self.markdown_options);
+        files
+            .into_par_iter()
+            .map(|path| {
+                let file = ContentFile::locate(roots, path)?;
+                log::debug!("Handling {file}");
+                let parsed = file
+                    .parse(&parsers)
+                    .with_whatever_context(|_| format!("Could not parse {file}"))?;
+                Ok((file, parsed))
+            })
+            .collect()
     }
 
     /// Sibling directory the build writes into before replacing `out`
@@ -520,5 +543,57 @@ mod tests {
         let mut staging = site.roots.out().as_os_str().to_os_string();
         staging.push(".staging");
         assert!(!std::path::Path::new(&staging).exists());
+    }
+
+    #[test]
+    fn lets_a_page_list_its_siblings_and_skip_itself() {
+        let site = Site::new();
+        site.write("templates/post.html", "<h1>{{ vars.title }}</h1>");
+        site.write(
+            "templates/list.html",
+            "{% for page in pages(pattern=\"blog/**/*.md\") %}\
+             {% if page.url != __url__ %}<a href=\"{{ page.url }}\">{{ page.vars.title }}</a>{% endif %}\
+             {% endfor %}",
+        );
+        site.write("root/blog/index.md", "---\ntemplate: list.html\n---\n");
+        site.write(
+            "root/blog/first.md",
+            "---\ntemplate: post.html\nvars:\n  title: First\n---\n",
+        );
+        site.write(
+            "root/blog/nested/second.md",
+            "---\ntemplate: post.html\nvars:\n  title: Second\n---\n",
+        );
+        // A file the build copies is not a page, so it never shows up in a listing
+        site.write("root/blog/diagram.svg", "<svg/>");
+
+        site.build().unwrap();
+
+        let listing = site.read("blog/index.html");
+        assert!(
+            listing.contains("<a href=\"/blog/first\">First</a>"),
+            "unexpected listing: {listing}"
+        );
+        assert!(
+            listing.contains("<a href=\"/blog/nested/second\">Second</a>"),
+            "unexpected listing: {listing}"
+        );
+        // Two posts are linked; `__url__` is the listing's own URL, which is how
+        // it skips its own entry
+        assert_eq!(listing.matches("<a href=").count(), 2, "listing: {listing}");
+    }
+
+    #[test]
+    fn fails_on_an_invalid_pattern_given_to_the_pages_function() {
+        let site = Site::new();
+        site.write(
+            "templates/list.html",
+            "{% for page in pages(pattern=\"blog/[\") %}{{ page.url }}{% endfor %}",
+        );
+        site.write("root/blog/index.md", "---\ntemplate: list.html\n---\n");
+
+        let error = format!("{}", Report::from_error(site.build().unwrap_err()));
+
+        assert!(error.contains("pages()"), "unexpected error: {error}");
     }
 }

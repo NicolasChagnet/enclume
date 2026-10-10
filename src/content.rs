@@ -69,7 +69,7 @@ impl ContentFile {
             return Ok(None);
         };
         let content = self.read()?;
-        let Some(metadata) = parser.parse(&content)? else {
+        let Some(metadata) = parser.parse(&content, &self.path)? else {
             return Ok(None);
         };
         Ok(Some(ParsedContent::new(self.clone(), metadata)))
@@ -121,9 +121,13 @@ impl ParsedContent {
         &self.metadata
     }
 
-    /// Render the content through the template it declares
-    pub fn render<T: Templater>(&self, templater: &T) -> Result<RenderedContent, snafu::Whatever> {
-        let html = templater.render(self.metadata.clone())?;
+    /// Render the content through the template it declares, for the page served at `url`
+    pub fn render<T: Templater>(
+        &self,
+        templater: &T,
+        url: &str,
+    ) -> Result<RenderedContent, snafu::Whatever> {
+        let html = templater.render(self.metadata.clone(), url)?;
         Ok(RenderedContent::new(self.file.clone(), html))
     }
 }

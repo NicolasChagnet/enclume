@@ -60,6 +60,25 @@ impl OutputLayout {
             None => file.clone(),
         }
     }
+
+    /// The URL a rendered page is served at
+    ///
+    /// An `index` page is served at its directory without a trailing slash, so
+    /// `blog/index.md` becomes `/blog` and the root `index.md` becomes `/`. Every
+    /// other page uses its built name: `blog/post.md` → `/blog/post` with clean
+    /// URLs, `/about.html` without them, and `/404.html` either way.
+    pub fn page_url(&self, file: &SitePath) -> Result<String, snafu::Whatever> {
+        let page = self.rendered_page(file)?;
+        if page.file_stem() != "index" {
+            return Ok(format!("/{page}"));
+        }
+        match page.as_path().parent() {
+            Some(parent) if !parent.as_os_str().is_empty() => {
+                Ok(format!("/{}", parent.to_string_lossy()))
+            }
+            _ => Ok("/".to_string()),
+        }
+    }
 }
 
 /// The built name of every content file, keyed by its source path
@@ -183,6 +202,31 @@ mod tests {
                 .as_str(),
             "blog/post/index.html"
         );
+    }
+
+    #[test]
+    fn maps_pages_to_the_url_they_are_served_at() {
+        let clean = OutputLayout::default();
+        assert_eq!(clean.page_url(&site_path("index.md")).unwrap(), "/");
+        assert_eq!(
+            clean.page_url(&site_path("blog/index.md")).unwrap(),
+            "/blog"
+        );
+        assert_eq!(clean.page_url(&site_path("about.md")).unwrap(), "/about");
+        assert_eq!(
+            clean.page_url(&site_path("blog/post.md")).unwrap(),
+            "/blog/post"
+        );
+        // `404` keeps its name under both layouts
+        assert_eq!(clean.page_url(&site_path("404.md")).unwrap(), "/404.html");
+
+        let flat = OutputLayout::new(false, false);
+        assert_eq!(
+            flat.page_url(&site_path("about.md")).unwrap(),
+            "/about.html"
+        );
+        assert_eq!(flat.page_url(&site_path("blog/index.md")).unwrap(), "/blog");
+        assert_eq!(flat.page_url(&site_path("404.md")).unwrap(), "/404.html");
     }
 
     #[test]

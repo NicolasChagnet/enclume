@@ -5,12 +5,14 @@ use snafu::prelude::*;
 use crate::{
     glob::glob_relative,
     output::Assets,
+    pages::Pages,
     parsers::{ParsedData, RawHtml},
     path::SitePath,
 };
 
 pub trait Templater {
-    fn render(&self, data: ParsedData) -> Result<RawHtml, snafu::Whatever>;
+    /// Render `data` for the page served at `url`
+    fn render(&self, data: ParsedData, url: &str) -> Result<RawHtml, snafu::Whatever>;
 }
 
 #[derive(Debug, Clone)]
@@ -21,10 +23,13 @@ pub struct TeraTemplater {
 impl TeraTemplater {
     /// `assets` backs the [`asset()`] function which templates link to files with
     ///
+    /// `pages` backs [`pages()`], which lists the other pages of the build.
+    ///
     /// [`asset()`]: https://keats.github.io/tera/docs/#asset
-    pub fn new(assets: Arc<Assets>) -> Self {
+    pub fn new(assets: Arc<Assets>, pages: Arc<Pages>) -> Self {
         let mut engine = tera::Tera::default();
         engine.register_function("asset", asset_function(assets));
+        engine.register_function("pages", pages_function(pages));
         Self { engine }
     }
 
@@ -66,8 +71,27 @@ fn asset_function(
     }
 }
 
+/// Build the `pages()` template function, which lists the other pages of the build
+///
+/// `{% for post in pages(pattern="blog/**/*.md") %}{{ post.url }}{% endfor %}` yields
+/// one `{path, url, vars}` entry per matching page, in source-path order. Templates
+/// can then build an index, a feed or a sitemap without a second source of truth.
+/// An invalid pattern fails the build instead of rendering an empty list.
+fn pages_function(
+    pages: Arc<Pages>,
+) -> impl Fn(tera::Kwargs, &tera::State) -> tera::TeraResult<tera::Value> + Send + Sync + 'static {
+    move |kwargs, _| {
+        let pattern = kwargs.get::<&str>("pattern")?.unwrap_or("**/*");
+        let value = pages
+            .as_value(pattern)
+            .map_err(|error| tera::Error::message(format!("pages(): {error}")))?;
+        tera::Value::try_from_serializable(&value)
+            .map_err(|error| tera::Error::message(format!("pages(): {error}")))
+    }
+}
+
 impl Templater for TeraTemplater {
-    fn render(&self, data: ParsedData) -> Result<RawHtml, snafu::Whatever> {
+    fn render(&self, data: ParsedData, url: &str) -> Result<RawHtml, snafu::Whatever> {
         let template_name = data.template().as_str();
         let values = data.as_value()?;
         let mut context = tera::Context::from_serialize(&values)
@@ -76,6 +100,9 @@ impl Templater for TeraTemplater {
         if let Some(content) = values["__content__"].as_str() {
             context.insert_value("__content__", tera::Value::safe_string(content));
         }
+        // The URL the page itself is served at, for canonical links and for a
+        // listing which must skip its own entry
+        context.insert_value("__url__", url.to_string().into());
         let rendered = self
             .engine
             .render(template_name, &context)
@@ -96,7 +123,7 @@ mod tests {
 
     /// Templater which knows the `post.html` template
     fn templater(template: &str, assets: Assets) -> TeraTemplater {
-        let mut templater = TeraTemplater::new(Arc::new(assets));
+        let mut templater = TeraTemplater::new(Arc::new(assets), Arc::new(Pages::default()));
         templater
             .engine
             .add_raw_template("post.html", template)
@@ -120,7 +147,7 @@ mod tests {
         let data = ParsedData::new(site_path("post.html"), vars, serde_json::json!(null));
 
         let rendered = templater("{{vars.views + 1}}", Assets::default())
-            .render(data)
+            .render(data, "/blog/post")
             .unwrap();
 
         assert_eq!(rendered.inner(), "43");
@@ -137,7 +164,7 @@ mod tests {
         );
 
         let rendered = templater("<h1>{{vars.title}}</h1>{{__content__}}", Assets::default())
-            .render(data)
+            .render(data, "/blog/post")
             .unwrap();
 
         // Variables are escaped, the parsed content is inserted as raw HTML
@@ -159,7 +186,7 @@ mod tests {
             r#"<link href="{{ asset(path="assets/style.css") }}">"#,
             assets,
         )
-        .render(data())
+        .render(data(), "/blog/post")
         .unwrap();
 
         assert_eq!(
@@ -171,7 +198,7 @@ mod tests {
     #[test]
     fn fails_on_an_asset_the_build_does_not_know() {
         let error = templater(r#"{{ asset(path="assets/typo.css") }}"#, Assets::default())
-            .render(data())
+            .render(data(), "/blog/post")
             .unwrap_err();
         let error = format!("{}", snafu::Report::from_error(error));
 
@@ -184,7 +211,7 @@ mod tests {
     #[test]
     fn fails_on_an_asset_path_which_escapes_the_root() {
         let error = templater(r#"{{ asset(path="../secret.css") }}"#, Assets::default())
-            .render(data())
+            .render(data(), "/blog/post")
             .unwrap_err();
         let error = format!("{}", snafu::Report::from_error(error));
 

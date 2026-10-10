@@ -14,6 +14,7 @@ mod content;
 mod dev;
 mod glob;
 mod output;
+mod pages;
 mod parsers;
 mod path;
 mod templates;
@@ -204,6 +205,7 @@ Page not found
 mod tests {
     use super::*;
     use crate::parsers::{ContentParser, MarkdownParser};
+    use crate::path::SitePath;
 
     #[test]
     fn cli_flags_map_to_the_output_layout() {
@@ -241,8 +243,12 @@ mod tests {
             ..Default::default()
         }
         .into();
+        let path = SitePath::try_from(PathBuf::from("blog/post.md")).unwrap();
         let metadata = MarkdownParser::new(options)
-            .parse("---\ntemplate: post.html\nvars: {}\n---\nHello :smile:\n")
+            .parse(
+                "---\ntemplate: post.html\nvars: {}\n---\nHello :smile:\n",
+                &path,
+            )
             .unwrap()
             .expect("expected frontmatter");
         let value = metadata.as_value().unwrap();

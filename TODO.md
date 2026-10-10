@@ -10,6 +10,8 @@ Core
   - [x] HTML parsing
   - [x] Template layout rendering
 - [x] Generate pages at predictable URLs
+- [  ] Expose other pages to templates: a `pages()` function listing the parsed pages
+      matching a pattern, so a page can build an index of its siblings
 - [x] Copy static assets
 - [  ] ~Read configuration and expose site-wide variables~
 - [x] Clean and regenerate the output directory
@@ -18,6 +20,7 @@ Core
 Publishing
 - [x] Support page metadata and canonical URLs
 - [x] Support a custom 404 page
+- [  ] Drafts: keep draft posts out of listings and out of the built output
 
 Workflow
 - [x] Provide a local development server
@@ -28,8 +31,8 @@ Build
 - [x] Quality actions
 - [x] Release setup
 - [x] Homebrew integration
-
-## v1.1
+- [  ] Broken links
+- [  ] Orphan pages detection
 
 Content
 - [  ] Reading time estimate (blog)
@@ -39,8 +42,3 @@ Content
 - [  ] Responsive images
 - [  ] Generate sitemap.xml
 - [  ] Generate RSS or Atom feed
-
-Build
-- [  ] Broken links
-- [  ] Orphan pages detection
-- [  ] Drafts
