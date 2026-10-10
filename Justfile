@@ -3,16 +3,16 @@ set shell := ["bash", "-c"]
 
 fmt:
     @echo "Running formatter..."
-    @cargo fmt
+    @cargo fmt --all
 
 lint:
     @echo "Running linter..."
-    @cargo fmt --check
-    @cargo clippy -- -D warnings
+    @cargo fmt --all --check
+    @cargo clippy --workspace -- -D warnings
 
 test:
     @echo "Running tests..."
-    @cargo nextest run --test-threads="num-cpus" --no-tests=pass
+    @cargo nextest run --workspace --test-threads="num-cpus" --no-tests=pass
 
 ci: lint test
 

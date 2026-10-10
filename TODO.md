@@ -10,7 +10,7 @@ Core
   - [x] HTML parsing
   - [x] Template layout rendering
 - [x] Generate pages at predictable URLs
-- [  ] Expose other pages to templates: a `pages()` function listing the parsed pages
+- [x] Expose other pages to templates: a `pages()` function listing the parsed pages
       matching a pattern, so a page can build an index of its siblings
 - [x] Copy static assets
 - [  ] ~Read configuration and expose site-wide variables~

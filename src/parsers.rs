@@ -1,5 +1,6 @@
 use crate::path::SitePath;
 use rushdown::{parser::ParserExtension, renderer::html::RendererExtension};
+use rushdown_relative_links::relative_links_extension;
 use serde::{Deserialize, Serialize};
 use snafu::prelude::*;
 use std::path::PathBuf;
@@ -340,7 +341,7 @@ impl ContentParser for MarkdownParser {
             self.options.renderer_options(),
             self.options
                 .parser_extensions()
-                .and(rebase_extension(reference_base(path))),
+                .and(relative_links_extension(reference_base(path))),
             self.options.renderer_extensions(),
         );
 
@@ -437,164 +438,6 @@ fn reference_base(path: &SitePath) -> String {
         }
         _ => String::new(),
     }
-}
-
-/// Options of the extension resolving a file's relative references
-#[derive(Debug, Clone)]
-struct RebasingOptions {
-    /// The URL directory the file's relative references resolve against
-    base: String,
-}
-
-/// Rewrites the relative image destinations of a file to root-relative ones
-///
-/// A page is served at `/blog/post` without a trailing slash, so a browser
-/// resolves `plot.png` against `/blog/` while the asset sits at `/blog/post/`.
-/// Astro avoided this by rewriting every image to a hashed absolute URL; this
-/// keeps the file name and makes the reference root-relative, which is correct
-/// under both `/blog/post` and `/blog/post/`.
-#[derive(Debug)]
-struct RebasingImages {
-    base: String,
-}
-
-impl rushdown::parser::ParserOptions for RebasingOptions {}
-
-impl RebasingImages {
-    fn with_options(options: RebasingOptions) -> Self {
-        Self { base: options.base }
-    }
-}
-
-impl rushdown::parser::AstTransformer for RebasingImages {
-    fn transform(
-        &self,
-        arena: &mut rushdown::ast::Arena,
-        document: rushdown::ast::NodeRef,
-        reader: &mut rushdown::text::BasicReader,
-        _context: &mut rushdown::parser::Context,
-    ) {
-        use rushdown::text::Reader as _;
-
-        let source = reader.source();
-        let mut rewrites: Vec<(rushdown::ast::NodeRef, String)> = Vec::new();
-        let _ = rushdown::ast::walk(
-            arena,
-            document,
-            &mut |arena: &rushdown::ast::Arena,
-                  node_ref: rushdown::ast::NodeRef,
-                  entering: bool| {
-                if entering && rushdown::matches_kind!(arena[node_ref], Image) {
-                    let image = rushdown::as_kind_data!(arena[node_ref], Image);
-                    if let Some(destination) =
-                        rebase_destination(&self.base, image.destination_str(source))
-                    {
-                        rewrites.push((node_ref, destination));
-                    }
-                }
-                Ok::<rushdown::ast::WalkStatus, std::convert::Infallible>(
-                    rushdown::ast::WalkStatus::Continue,
-                )
-            },
-        );
-
-        for (node_ref, destination) in rewrites {
-            let rushdown::ast::KindData::Image(image) = arena[node_ref].kind_data_mut() else {
-                continue;
-            };
-            let title = image.title().cloned();
-            let rebuilt = match image.link_kind() {
-                rushdown::ast::LinkKind::Reference(reference) => {
-                    let value = reference.value().clone();
-                    let kind = reference.link_reference_kind();
-                    match title {
-                        Some(title) => rushdown::ast::Image::reference_with_title(
-                            destination,
-                            value,
-                            kind,
-                            title,
-                        ),
-                        None => rushdown::ast::Image::reference(destination, value, kind),
-                    }
-                }
-                _ => match title {
-                    Some(title) => rushdown::ast::Image::inline_with_title(destination, title),
-                    None => rushdown::ast::Image::inline(destination),
-                },
-            };
-            *image = rebuilt;
-        }
-    }
-}
-
-impl From<RebasingImages> for rushdown::parser::AnyAstTransformer {
-    fn from(transformer: RebasingImages) -> Self {
-        rushdown::parser::AnyAstTransformer::Extension(Box::new(transformer))
-    }
-}
-
-/// Returns a parser extension resolving the relative references of one file
-///
-/// The base directory is per file, so the extension is built per parse instead of
-/// living in [`MarkdownParserOptions`].
-fn rebase_extension(base: String) -> impl rushdown::parser::ParserExtension {
-    /// Runs after the syntax extensions, on a complete document
-    const PRIORITY: u32 = 1000;
-
-    rushdown::parser::parser_extension(move |parser| {
-        parser.add_ast_transformer(
-            RebasingImages::with_options,
-            RebasingOptions { base: base.clone() },
-            PRIORITY,
-        );
-    })
-}
-
-/// Resolve a relative destination against the directory of the file it is written in
-///
-/// Returns `None` for the destinations the build must leave alone: empty,
-/// root-relative, protocol-relative, fragment-only, or carrying a scheme
-/// (`https:`, `mailto:`, `data:`, …).
-fn rebase_destination(base: &str, destination: &str) -> Option<String> {
-    if destination.is_empty()
-        || destination.starts_with('/')
-        || destination.starts_with('#')
-        || destination.starts_with('?')
-        || has_scheme(destination)
-    {
-        return None;
-    }
-    let joined = match base.is_empty() {
-        true => format!("/{destination}"),
-        false => format!("{base}/{destination}"),
-    };
-    Some(normalize_destination(&joined))
-}
-
-/// Whether a destination opens with a URL scheme, which makes it absolute
-fn has_scheme(destination: &str) -> bool {
-    let Some((scheme, _)) = destination.split_once(':') else {
-        return false;
-    };
-    scheme.starts_with(|c: char| c.is_ascii_alphabetic())
-        && scheme
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.'))
-}
-
-/// Resolve `.` and `..` segments, keeping the result root-relative
-fn normalize_destination(destination: &str) -> String {
-    let mut segments: Vec<&str> = Vec::new();
-    for segment in destination.split('/') {
-        match segment {
-            "" | "." => {}
-            ".." => {
-                segments.pop();
-            }
-            segment => segments.push(segment),
-        }
-    }
-    format!("/{}", segments.join("/"))
 }
 
 /// Splits a string into a yaml frontmatter part and the rest
@@ -828,55 +671,6 @@ mod tests {
         let value = metadata.as_value().unwrap();
         assert_eq!(value["vars"]["title"], serde_json::json!("hi"));
         assert_eq!(value["__content__"], serde_json::json!("<h1>Raw</h1>\n"));
-    }
-
-    #[test]
-    fn resolves_relative_destinations_against_the_directory_of_the_file() {
-        // Assets keep their source-relative path, so they sit next to the content
-        assert_eq!(
-            rebase_destination("/blog/post", "plot.png").unwrap(),
-            "/blog/post/plot.png"
-        );
-        assert_eq!(
-            rebase_destination("/blog/post", "./plot.png").unwrap(),
-            "/blog/post/plot.png"
-        );
-        assert_eq!(
-            rebase_destination("/blog", "post/plot.png").unwrap(),
-            "/blog/post/plot.png"
-        );
-        // A file beside the content root resolves to the root
-        assert_eq!(rebase_destination("", "plot.png").unwrap(), "/plot.png");
-        // `..` walks back up and cannot escape the root
-        assert_eq!(
-            rebase_destination("/blog/a/b", "../plot.png").unwrap(),
-            "/blog/a/plot.png"
-        );
-        assert_eq!(
-            rebase_destination("/blog", "../../plot.png").unwrap(),
-            "/plot.png"
-        );
-    }
-
-    #[test]
-    fn leaves_destinations_the_browser_resolves_alone() {
-        for destination in [
-            "/blog/post/plot.png",          // already root-relative
-            "https://example.com/plot.png", // absolute
-            "http://example.com/plot.png",
-            "//example.com/plot.png", // protocol-relative
-            "mailto:someone@example.com",
-            "data:image/png;base64,AAAA",
-            "tel:+31000000000",
-            "#section",
-            "?query=1",
-            "",
-        ] {
-            assert!(
-                rebase_destination("/blog/post", destination).is_none(),
-                "{destination} should be left alone"
-            );
-        }
     }
 
     #[test]

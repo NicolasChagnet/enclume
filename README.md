@@ -80,7 +80,7 @@ The `__content__` is a reserved templating variable for the parsed Markdown HTML
 
 Pages are built with clean URLs by default: `about.md` becomes `about/index.html`. Pass `--no-clean-urls` to build `about.html` instead. Pass `--hash-assets` to add a content hash to the name of every css and js file (`style.css` becomes `style.<hash>.css`), which `asset()` resolves.
 
-A relative reference in Markdown resolves against the directory of the file it is written in:
+A relative reference in Markdown — an image or a link — resolves against the directory of the file it is written in:
 
 ```markdown
 ![Periodogram](periodogram.png)

@@ -323,6 +323,7 @@ dependencies = [
  "rushdown-emoji",
  "rushdown-fenced-div",
  "rushdown-footnote",
+ "rushdown-relative-links",
  "serde",
  "serde_json",
  "snafu",
@@ -1006,6 +1007,13 @@ name = "rushdown-footnote"
 version = "0.9.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "827f5ccd7304b0e827adb920c7fa5fc7db074c9014bd5083d884c6329d398bca"
+dependencies = [
+ "rushdown",
+]
+
+[[package]]
+name = "rushdown-relative-links"
+version = "0.1.0"
 dependencies = [
  "rushdown",
 ]

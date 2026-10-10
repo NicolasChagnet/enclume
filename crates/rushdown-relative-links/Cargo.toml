@@ -1,0 +1,10 @@
+[package]
+name = "rushdown-relative-links"
+version = "0.1.0"
+edition = "2024"
+description = "Resolve the relative destinations of a rushdown document against a base directory."
+license = "MIT"
+repository = "https://github.com/NicolasChagnet/enclume"
+
+[dependencies]
+rushdown = { workspace = true }
