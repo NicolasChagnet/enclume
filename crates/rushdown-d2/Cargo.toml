@@ -1,0 +1,10 @@
+[package]
+name = "rushdown-d2"
+version = "0.1.0"
+edition = "2024"
+description = "Draw the d2 code blocks of a rushdown document as inline SVG."
+license = "MIT"
+repository = "https://github.com/NicolasChagnet/enclume"
+
+[dependencies]
+rushdown = { workspace = true }

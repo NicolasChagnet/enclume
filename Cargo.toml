@@ -1,5 +1,6 @@
 [workspace]
 members = [
+    "crates/rushdown-d2",
     "crates/rushdown-lumis",
     "crates/rushdown-relative-links",
     "crates/rushdown-toc",
@@ -29,6 +30,7 @@ notify-debouncer-full = "0.7.0"
 rayon = "1.12.0"
 regex = "1.13.1"
 rushdown = { workspace = true }
+rushdown-d2 = { path = "crates/rushdown-d2" }
 rushdown-diagram = "0.10.2"
 rushdown-emoji = "0.9.8"
 rushdown-fenced-div = "0.1.5"

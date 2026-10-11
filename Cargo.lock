@@ -511,6 +511,7 @@ dependencies = [
  "rayon",
  "regex",
  "rushdown",
+ "rushdown-d2",
  "rushdown-diagram",
  "rushdown-emoji",
  "rushdown-fenced-div",
@@ -1477,6 +1478,13 @@ dependencies = [
  "memchr",
  "phf 0.13.1",
  "phf_codegen 0.13.1",
+]
+
+[[package]]
+name = "rushdown-d2"
+version = "0.1.0"
+dependencies = [
+ "rushdown",
 ]
 
 [[package]]

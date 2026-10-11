@@ -76,6 +76,9 @@ struct MarkdownParserCliOptions {
     /// Do not parse diagram blocks
     #[arg(long = "md-disable-diagrams")]
     disable_diagrams: bool,
+    /// Do not parse d2 diagram blocks
+    #[arg(long = "md-disable-d2")]
+    disable_d2: bool,
     /// Do not parse fenced div blocks
     #[arg(long = "md-disable-fenced-divs")]
     disable_fenced_divs: bool,
@@ -110,6 +113,7 @@ impl From<MarkdownParserCliOptions> for MarkdownParserOptions {
             .with_footnotes(!value.disable_footnotes)
             .with_emojis(!value.disable_emojis)
             .with_diagrams(!value.disable_diagrams)
+            .with_d2(!value.disable_d2)
             .with_fenced_divs(!value.disable_fenced_divs)
             .with_math(!value.disable_math)
             .with_syntax_highlighting(!value.disable_code)

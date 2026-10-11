@@ -1,5 +1,6 @@
 use crate::path::SitePath;
 use rushdown::{parser::ParserExtension, renderer::html::RendererExtension};
+use rushdown_d2::{d2_html_renderer_extension, d2_parser_extension};
 use rushdown_lumis::lumis_html_renderer_extension;
 use rushdown_math::math_html_renderer_extension;
 use rushdown_relative_links::relative_links_extension;
@@ -209,6 +210,7 @@ pub struct MarkdownParserOptions {
     enable_footnotes: bool,
     enable_emojis: bool,
     enable_diagrams: bool,
+    enable_d2: bool,
     enable_fenced_divs: bool,
     enable_math: bool,
     enable_syntax_highlighting: bool,
@@ -225,6 +227,7 @@ impl Default for MarkdownParserOptions {
             enable_footnotes: true,
             enable_emojis: true,
             enable_diagrams: true,
+            enable_d2: true,
             enable_fenced_divs: true,
             enable_math: true,
             enable_syntax_highlighting: true,
@@ -263,6 +266,11 @@ impl MarkdownParserOptions {
 
     pub fn with_diagrams(mut self, enabled: bool) -> Self {
         self.enable_diagrams = enabled;
+        self
+    }
+
+    pub fn with_d2(mut self, enabled: bool) -> Self {
+        self.enable_d2 = enabled;
         self
     }
 
@@ -336,6 +344,10 @@ impl MarkdownParserOptions {
                     .apply(parser);
                 }
 
+                if options.enable_d2 {
+                    d2_parser_extension().apply(parser);
+                }
+
                 if options.enable_fenced_divs {
                     rushdown_fenced_div::fenced_div_parser_extension().apply(parser);
                 }
@@ -372,6 +384,10 @@ impl MarkdownParserOptions {
                         rushdown_diagram::DiagramHtmlRendererOptions::default(),
                     )
                     .apply(renderer);
+                }
+
+                if options.enable_d2 {
+                    d2_html_renderer_extension(rushdown_d2::Options::default()).apply(renderer);
                 }
 
                 if options.enable_fenced_divs {
