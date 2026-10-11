@@ -1,7 +1,6 @@
 [workspace]
 members = [
     "crates/rushdown-lumis",
-    "crates/rushdown-math",
     "crates/rushdown-relative-links",
     "crates/rushdown-toc",
 ]
@@ -34,7 +33,6 @@ rushdown-diagram = "0.10.2"
 rushdown-emoji = "0.9.8"
 rushdown-fenced-div = "0.1.5"
 rushdown-footnote = "0.9.8"
-rushdown-math = { path = "crates/rushdown-math" }
 rushdown-relative-links = { path = "crates/rushdown-relative-links" }
 rushdown-toc = { path = "crates/rushdown-toc" }
 rushdown-lumis = { path = "crates/rushdown-lumis" }
@@ -46,6 +44,8 @@ tokio = { version = "1.53.2", features = ["full"] }
 toml = { version = "1.1.6", features = ["serde"] }
 tower-http = { version = "0.7.1", features = ["fs"] }
 yaml_serde = "0.10.7"
+rushdown-math = "0.1.1"
+lumis = { version = "0.17.1", features = ["lang-bundle-full"] }
 
 [dev-dependencies]
 tempfile = "3.27.0"

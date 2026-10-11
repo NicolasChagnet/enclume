@@ -505,6 +505,7 @@ dependencies = [
  "glob",
  "include_dir",
  "log",
+ "lumis",
  "notify",
  "notify-debouncer-full",
  "rayon",
@@ -1526,7 +1527,9 @@ dependencies = [
 
 [[package]]
 name = "rushdown-math"
-version = "0.1.0"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c2824415d23bf9efd4338a6b8880d751405bc829905a4b6084636d7a3501df6e"
 dependencies = [
  "katex-rs",
  "rushdown",
