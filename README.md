@@ -88,6 +88,26 @@ A relative reference in Markdown — an image or a link — resolves against the
 
 so `blog/post/index.md` links to `/blog/post/periodogram.png`, where the asset is copied. This matters because a page is served at `/blog/post` without a trailing slash, and a browser would otherwise resolve the reference against `/blog/`. References written in raw HTML are passed through verbatim, so those must be root-relative (`/blog/post/periodogram.png`) or absolute.
 
+### Site-wide variables
+
+Variables every page shares — a site title, a base URL, a list of links in the navigation — go once in `globals.yaml` (or `globals.yml`), at the root of the site, next to `root/` and `templates/`:
+
+```yaml
+# globals.yaml
+title: "My Webpage"
+base_url: "https://example.com"
+author: "Jane Doe"
+```
+
+Every template reads them under `globals`:
+
+```html
+<title>{{ globals.title }}</title>
+<a rel="author" href="/about">{{ globals.author }}</a>
+```
+
+A page overrides nothing: `globals` stays the same for every page, while `vars` holds what a single file declares. The file is optional. Only one spelling may exist, so a `globals.yaml` beside a `globals.yml` fails the build, as does a globals file which cannot be parsed.
+
 ### Listing other pages
 
 A template cannot read the filesystem, but it can list the pages the build parsed. The `pages()` function takes a glob pattern, relative to `root/` and with the same `{a,b}` alternatives as the file patterns, and returns the matching pages in source-path order:
@@ -114,8 +134,6 @@ Sitemap and feeds need to be mapped manually using the `output` variable
 ---
 template: sitemap.xml
 output: sitemap.xml
-vars:
-  site: "https://example.com"
 ---
 ```
 
@@ -124,12 +142,12 @@ vars:
 <?xml version="1.0" encoding="UTF-8"?>
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
 {% for page in pages(pattern="blog/**/*.md") %}
-    <url><loc>{{ vars.site }}{{ page.url }}</loc></url>
+    <url><loc>{{ globals.base_url }}{{ page.url }}</loc></url>
 {% endfor %}
 </urlset>
 ```
 
-A sitemap or a feed wants absolute URLs, which the build cannot know, so the page which builds it declares the site URL itself, like any other variable. A feed is the same mechanism with `output: feed/rss.xml`: a nested output path writes `dist/feed/rss.xml`, served at `/feed/rss.xml`. An `output` which is absolute or climbs out of the output directory fails the build, like any other site path.
+A sitemap or a feed wants absolute URLs, which the build cannot know, so the site declares it once in the globals file, where every page reads it. A feed is the same mechanism with `output: feed/rss.xml`: a nested output path writes `dist/feed/rss.xml`, served at `/feed/rss.xml`. An `output` which is absolute or climbs out of the output directory fails the build, like any other site path.
 
 ### Table of contents
 

@@ -11,7 +11,7 @@ use crate::{
     glob::glob_relative,
     output::{Assets, Output, OutputLayout},
     pages::Pages,
-    parsers::{MarkdownParserOptions, Parsers},
+    parsers::{MarkdownParserOptions, Parsers, load_globals},
     path::{Roots, SitePath},
     templates::TeraTemplater,
 };
@@ -75,14 +75,14 @@ impl SiteBuilder {
         // Parsing runs first, so the `pages()` template function can list every page
         // while the templates render. Then each file is written: the ones declaring
         // metadata through their template, the rest copied verbatim.
-
+        let globals = load_globals(roots.globals_file()?.as_deref())?;
         let parsed = self.parse_all(roots, files)?;
         let pages = Arc::new(Pages::collect(
             parsed.iter().filter_map(|(_, parsed)| parsed.as_ref()),
             &self.layout,
         )?);
 
-        let mut templater = TeraTemplater::new(Arc::clone(&assets), Arc::clone(&pages));
+        let mut templater = TeraTemplater::new(Arc::clone(&assets), Arc::clone(&pages), globals);
         templater.load_templates(&roots.templates_dir())?;
 
         parsed.into_par_iter().try_for_each(|(file, parsed)| {
@@ -217,6 +217,7 @@ fn ensure_deletable(dir: &Path) -> Result<(), snafu::Whatever> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::path::GLOBALS_FILE_NAMES;
     use snafu::Report;
     use std::fs;
 
@@ -748,5 +749,63 @@ mod tests {
         let error = format!("{}", Report::from_error(site.build().unwrap_err()));
 
         assert!(error.contains("pages()"), "unexpected error: {error}");
+    }
+
+    #[test]
+    fn exposes_globals_from_either_spelling_of_the_globals_file() {
+        for name in GLOBALS_FILE_NAMES {
+            let site = Site::new();
+            site.write(name, "site: https://example.com\n");
+            site.write(
+                "templates/post.html",
+                "<a href=\"{{ globals.site }}\">{{ vars.title }}</a>",
+            );
+            site.write(
+                "root/index.md",
+                "---\ntemplate: post.html\nvars:\n  title: Home\n---\n",
+            );
+            site.write(
+                "root/about.html",
+                "---\ntemplate: post.html\nvars:\n  title: About\n---\n",
+            );
+
+            site.build().unwrap();
+
+            assert_eq!(
+                site.read("index.html"),
+                "<a href=\"https://example.com\">Home</a>",
+                "{name}"
+            );
+            assert_eq!(
+                site.read("about/index.html"),
+                "<a href=\"https://example.com\">About</a>",
+                "{name}"
+            );
+        }
+    }
+
+    #[test]
+    fn fails_on_a_globals_file_which_cannot_be_parsed() {
+        let site = Site::new();
+        site.write("globals.yaml", "title: [unclosed\n");
+        site.write("templates/post.html", "{{ globals.title }}");
+        site.write("root/index.md", "---\ntemplate: post.html\n---\n");
+
+        let error = format!("{}", Report::from_error(site.build().unwrap_err()));
+
+        assert!(error.contains("globals"), "unexpected error: {error}");
+    }
+
+    #[test]
+    fn fails_on_two_globals_files() {
+        let site = Site::new();
+        site.write("globals.yaml", "title: Homepage\n");
+        site.write("globals.yml", "title: Leftover\n");
+        site.write("templates/post.html", "{{ globals.title }}");
+        site.write("root/index.md", "---\ntemplate: post.html\n---\n");
+
+        let error = format!("{}", Report::from_error(site.build().unwrap_err()));
+
+        assert!(error.contains("globals.yml"), "unexpected error: {error}");
     }
 }

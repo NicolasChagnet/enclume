@@ -6,7 +6,7 @@ use rushdown_math::math_html_renderer_extension;
 use rushdown_relative_links::relative_links_extension;
 use serde::{Deserialize, Serialize};
 use snafu::prelude::*;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 pub type Value = serde_json::Value;
 pub type VarMap = std::collections::HashMap<String, Value>;
@@ -550,6 +550,21 @@ impl ContentParser for YamlParser {
     }
 }
 
+/// Load the site-wide variables a build exposes to every template
+///
+/// A site which declares no globals file renders without `globals`. A file
+/// which cannot be read or parsed fails the build, like any other file it
+/// cannot parse.
+pub fn load_globals(path: Option<&Path>) -> Result<Option<Value>, snafu::Whatever> {
+    let Some(path) = path else {
+        return Ok(None);
+    };
+    let content = std::fs::read_to_string(path)
+        .whatever_context(format!("Couldn't read globals file {}", path.display()))?;
+    yaml_serde::from_str(&content)
+        .whatever_context(format!("Couldn't parse globals file {}", path.display()))
+}
+
 /// The URL directory the relative references of `path` resolve against
 ///
 /// Assets keep their source-relative path in the output, so a reference sitting
@@ -937,5 +952,44 @@ mod tests {
             .unwrap();
 
         assert!(parsed.is_none());
+    }
+
+    #[test]
+    fn loads_globals_from_a_yaml_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("globals.yaml");
+        std::fs::write(&path, "title: My site\nnav:\n  - Home\n").unwrap();
+
+        let globals = load_globals(Some(&path))
+            .unwrap()
+            .expect("expected globals");
+
+        assert_eq!(globals["title"], serde_json::json!("My site"));
+        assert_eq!(globals["nav"][0], serde_json::json!("Home"));
+    }
+
+    #[test]
+    fn treats_a_missing_or_empty_globals_file_as_no_globals() {
+        assert!(load_globals(None).unwrap().is_none());
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("globals.yaml");
+        std::fs::write(&path, "").unwrap();
+
+        assert!(load_globals(Some(&path)).unwrap().is_none());
+    }
+
+    #[test]
+    fn reports_a_globals_file_which_cannot_be_parsed() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("globals.yaml");
+        std::fs::write(&path, "title: [unclosed\n").unwrap();
+
+        let error = format!(
+            "{}",
+            snafu::Report::from_error(load_globals(Some(&path)).unwrap_err())
+        );
+
+        assert!(error.contains("globals"), "unexpected error: {error}");
     }
 }

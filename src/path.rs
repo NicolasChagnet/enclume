@@ -7,6 +7,8 @@ use std::{
 pub const COLLECTIONS_DIR: &str = "collections";
 pub const CONTENT_DIR: &str = "root";
 pub const TEMPLATES_DIR: &str = "templates";
+/// The names a site may give its file of site-wide variables, in lookup order
+pub const GLOBALS_FILE_NAMES: [&str; 2] = ["globals.yaml", "globals.yml"];
 
 /// The directory roots of a site
 ///
@@ -60,6 +62,28 @@ impl Roots {
 
     pub fn collections_dir(&self) -> PathBuf {
         self.base.join(COLLECTIONS_DIR)
+    }
+
+    /// The file of site-wide variables, when the site declares one
+    ///
+    /// A site which declares both spellings is ambiguous, so the build fails
+    /// rather than reading one and silently ignoring the other.
+    pub fn globals_file(&self) -> Result<Option<PathBuf>, snafu::Whatever> {
+        let mut files = GLOBALS_FILE_NAMES
+            .iter()
+            .map(|name| self.base.join(name))
+            .filter(|path| path.is_file());
+        let Some(file) = files.next() else {
+            return Ok(None);
+        };
+        if let Some(other) = files.next() {
+            whatever!(
+                "Found two globals files, {} and {}: keep only one",
+                file.display(),
+                other.display()
+            );
+        }
+        Ok(Some(file))
     }
 }
 
@@ -222,6 +246,34 @@ mod tests {
 
         assert!(Roots::new(base.clone(), base.join("dist")).is_err());
         assert!(Roots::new(base.clone(), base).is_err());
+    }
+
+    #[test]
+    fn finds_the_globals_file_of_a_site() {
+        let dir = tempfile::tempdir().unwrap();
+        let base = dir.path().join("src");
+        std::fs::create_dir(&base).unwrap();
+        let roots = Roots::new(base.clone(), dir.path().join("dist")).unwrap();
+
+        assert_eq!(roots.globals_file().unwrap(), None);
+
+        for name in GLOBALS_FILE_NAMES {
+            let other = GLOBALS_FILE_NAMES
+                .iter()
+                .find(|other| **other != name)
+                .unwrap();
+            std::fs::write(base.join(name), "title: My site\n").unwrap();
+            assert_eq!(
+                roots.globals_file().unwrap(),
+                Some(roots.base().join(name)),
+                "{name}"
+            );
+            // Both spellings at once are ambiguous
+            std::fs::write(base.join(other), "title: Other\n").unwrap();
+            assert!(roots.globals_file().is_err(), "{name} beside {other}");
+            std::fs::remove_file(base.join(name)).unwrap();
+            std::fs::remove_file(base.join(other)).unwrap();
+        }
     }
 
     #[test]

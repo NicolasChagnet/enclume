@@ -6,7 +6,7 @@ use crate::{
     glob::glob_relative,
     output::Assets,
     pages::Pages,
-    parsers::{ParsedData, RawHtml},
+    parsers::{ParsedData, RawHtml, Value},
     path::SitePath,
 };
 
@@ -18,19 +18,22 @@ pub trait Templater {
 #[derive(Debug, Clone)]
 pub struct TeraTemplater {
     engine: tera::Tera,
+    globals: Option<Value>,
 }
 
 impl TeraTemplater {
     /// `assets` backs the [`asset()`] function which templates link to files with
     ///
     /// `pages` backs [`pages()`], which lists the other pages of the build.
+    /// `globals` holds the site-wide variables every page renders with, read from
+    /// the site's globals file.
     ///
     /// [`asset()`]: https://keats.github.io/tera/docs/#asset
-    pub fn new(assets: Arc<Assets>, pages: Arc<Pages>) -> Self {
+    pub fn new(assets: Arc<Assets>, pages: Arc<Pages>, globals: Option<Value>) -> Self {
         let mut engine = tera::Tera::default();
         engine.register_function("asset", asset_function(assets));
         engine.register_function("pages", pages_function(pages));
-        Self { engine }
+        Self { engine, globals }
     }
 
     /// Register every template in `template_dir`, keyed by its path relative to it
@@ -98,6 +101,12 @@ impl Templater for TeraTemplater {
         let values = data.as_value()?;
         let mut context = tera::Context::from_serialize(&values)
             .whatever_context("Couldn't convert into template context")?;
+        // Site-wide variables, the same for every page
+        if let Some(globals) = &self.globals {
+            let globals = tera::Value::try_from_serializable(globals)
+                .whatever_context("Couldn't convert the globals into template values")?;
+            context.insert_value("globals", globals);
+        }
         // The content holds an HTML fragment or structured data: never escape it
         if let Some(content) = values["__content__"].as_str() {
             context.insert_value("__content__", tera::Value::safe_string(content));
@@ -125,7 +134,7 @@ mod tests {
 
     /// Templater which knows the `post.html` template
     fn templater(template: &str, assets: Assets) -> TeraTemplater {
-        let mut templater = TeraTemplater::new(Arc::new(assets), Arc::new(Pages::default()));
+        let mut templater = TeraTemplater::new(Arc::new(assets), Arc::new(Pages::default()), None);
         templater
             .engine
             .add_raw_template("post.html", template)
