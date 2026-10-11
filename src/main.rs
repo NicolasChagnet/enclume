@@ -1,6 +1,6 @@
 use clap::{Parser, Subcommand};
 use snafu::prelude::*;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use crate::{
     build::{BuildMode, Builder, SiteBuilder},
@@ -13,6 +13,7 @@ mod build;
 mod content;
 mod dev;
 mod glob;
+mod init;
 mod output;
 mod pages;
 mod parsers;
@@ -81,6 +82,18 @@ struct MarkdownParserCliOptions {
     /// Do not parse math formulas
     #[arg(long = "md-disable-math")]
     disable_math: bool,
+    /// Disable code blocks parsing
+    #[arg(long = "md-disable-code")]
+    disable_code: bool,
+    /// Code light theme (e.g. 'github_light')
+    #[arg(long = "code-light-theme")]
+    code_light_theme: Option<String>,
+    /// Code dark theme (e.g. 'catppuccin_macchiato')
+    #[arg(long = "code-dark-theme")]
+    code_dark_theme: Option<String>,
+    /// Disable line numbers in code blocks
+    #[arg(long = "code-line-numbers")]
+    disable_code_line_numbers: bool,
 }
 
 impl From<&BuildOptions> for OutputLayout {
@@ -91,7 +104,7 @@ impl From<&BuildOptions> for OutputLayout {
 
 impl From<MarkdownParserCliOptions> for MarkdownParserOptions {
     fn from(value: MarkdownParserCliOptions) -> Self {
-        Self::default()
+        let mut options = Self::default()
             .with_auto_heading_ids(!value.no_heading_ids)
             .with_raw_html(!value.no_raw_html)
             .with_footnotes(!value.disable_footnotes)
@@ -99,6 +112,16 @@ impl From<MarkdownParserCliOptions> for MarkdownParserOptions {
             .with_diagrams(!value.disable_diagrams)
             .with_fenced_divs(!value.disable_fenced_divs)
             .with_math(!value.disable_math)
+            .with_syntax_highlighting(!value.disable_code)
+            .with_code_line_numbers(!value.disable_code_line_numbers);
+
+        if let Some(light_theme) = value.code_light_theme {
+            options = options.with_code_light_theme(light_theme);
+        }
+        if let Some(dark_theme) = value.code_dark_theme {
+            options = options.with_code_dark_theme(dark_theme);
+        }
+        options
     }
 }
 
@@ -129,7 +152,7 @@ async fn main() -> Result<(), snafu::Whatever> {
             dev::serve_and_watch(roots, builder).await?;
         }
         Command::Init => {
-            init_project()?;
+            init::project(Path::new("src"))?;
         }
     }
     Ok(())
@@ -150,63 +173,6 @@ fn initialize_logging() -> Result<(), snafu::Whatever> {
         })
         .try_init()
         .whatever_context("Failed to initialize logging...")?;
-    Ok(())
-}
-
-/// Initializes a project structure at the current directory
-///
-/// Creates the following directories under `src/`
-/// ```text
-/// src/
-///    templates/
-///       layout.html
-///    root/
-///       index.md
-///       404.md
-/// ```
-fn init_project() -> Result<(), snafu::Whatever> {
-    std::fs::create_dir_all("./src/templates")
-        .whatever_context("Couldn't create `templates` directory")?;
-    std::fs::create_dir_all("./src/root").whatever_context("Couldn't create `root` directory")?;
-
-    std::fs::write(
-        "./src/templates/layout.html",
-        r#"
-<!DOCTYPE html>
-<html lang="en">
-    <head>
-        <title>{{ vars.title }}</title>
-    </head>
-    <body>
-        {{__content__}}
-    </body>
-</html>"#,
-    )
-    .whatever_context("Couldn't write layout.html template")?;
-
-    std::fs::write(
-        "./src/root/index.md",
-        r#"---
-template: layout.html
-vars:
-    title: Home
----
-Hello, World!
-"#,
-    )
-    .whatever_context("Couldn't write index.md template")?;
-
-    std::fs::write(
-        "./src/root/404.md",
-        r#"---
-template: layout.html
-vars:
-    title: 404 Not Found
----
-Page not found
-"#,
-    )
-    .whatever_context("Couldn't write 404.md template")?;
     Ok(())
 }
 

@@ -4,9 +4,10 @@
 //! are `<span>` elements styled inline from the theme, with the colours of the
 //! theme on the block itself, the gutter of line numbers in the colour the
 //! theme gives to `line_number`, and a marked line in the colour it gives to
-//! `highlighted`. A block with a title is written inside the title bar of the
-//! page — a `<figure>` holding the `<figcaption>` of the title — and a block
-//! whose options ask for it names the scope of every token in the
+//! `highlighted` and with the class `l-highlighted`, the class lumis gives it
+//! in its own markup. A block with a title is written inside the title bar of
+//! the page — a `<figure>` holding the `<figcaption>` of the title — and a
+//! block whose options ask for it names the scope of every token in the
 //! `data-highlight` attribute of its `<span>`.
 
 use std::{any::TypeId, collections::HashMap, io, marker::PhantomData, str::FromStr};
@@ -52,7 +53,9 @@ fn render_block(options: &Options, language: &str, meta: &MetaOptions, code: &st
         highlight_lines: (!marked.is_empty()).then_some(HighlightLines {
             lines: marked,
             style: Some(HighlightLinesStyle::Theme),
-            class: None,
+            // The class lumis gives a marked line itself, so that a page styles
+            // one with the same rule whatever the formatter wrote it
+            class: Some("l-highlighted".to_string()),
         }),
         code,
     };

@@ -70,7 +70,8 @@
 //!
 //! - `line_numbers` adds the gutter of line numbers, which count from one;
 //! - `highlight_lines=3,7-9` marks lines, which the theme draws in the colour
-//!   it gives to `highlighted`;
+//!   it gives to `highlighted`, and which carry the class `l-highlighted`
+//!   lumis gives them in its own markup, for a page which styles them further;
 //! - `title="src/main.rs"` writes the title bar of the block, a
 //!   `<figure class="lumis-figure">` which holds the title in a
 //!   `<figcaption class="lumis-title">` and then the block itself. The page

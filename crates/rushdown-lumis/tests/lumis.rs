@@ -159,6 +159,10 @@ fn marks_the_lines_a_block_asks_for() {
         1,
         "only the marked line wears the color of the theme for highlighted lines: {html}"
     );
+    assert!(
+        html.contains(r#"<span class="l-line l-highlighted""#),
+        "the marked line carries the class lumis gives it: {html}"
+    );
 }
 
 #[test]
