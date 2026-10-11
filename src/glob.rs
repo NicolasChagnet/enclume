@@ -6,22 +6,9 @@ use std::path::{Path, PathBuf};
 ///
 /// The result is sorted and deduplicated, so a build stays deterministic and
 /// brace alternatives cannot return the same file twice.
-pub fn glob_relative(
-    root: &Path,
-    pattern: &str,
-    ignore_pattern: Option<&str>,
-) -> Result<Vec<SitePath>, snafu::Whatever> {
+pub fn glob_relative(root: &Path, pattern: &str) -> Result<Vec<SitePath>, snafu::Whatever> {
     let mut files = glob_files(&root.join(pattern))?
         .into_iter()
-        // Filter out drafts
-        .filter(|path| match ignore_pattern {
-            Some(pat) => path
-                .file_name()
-                .and_then(|s| s.to_str())
-                .map(|s| !s.contains(pat))
-                .unwrap_or(false),
-            None => true,
-        })
         .map(|path| {
             let relative = path.strip_prefix(root).whatever_context(format!(
                 "File {} is outside {}",

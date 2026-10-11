@@ -37,7 +37,7 @@ impl TeraTemplater {
     ///
     /// HTML and XML templates are both loaded.
     pub fn load_templates(&mut self, template_dir: &Path) -> Result<(), snafu::Whatever> {
-        let templates = glob_relative(template_dir, "**/*.{html,xml}", None)?;
+        let templates = glob_relative(template_dir, "**/*.{html,xml}")?;
         let files = templates
             .into_iter()
             .map(|file| {

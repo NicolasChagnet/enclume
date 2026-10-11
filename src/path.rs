@@ -111,6 +111,16 @@ impl SitePath {
         self.0.extension().and_then(OsStr::to_str)
     }
 
+    /// The file name: `blog/post.md` gives `post.md`
+    ///
+    /// Construction guarantees a file name, so this never fails.
+    pub fn file_name(&self) -> &str {
+        self.0
+            .file_name()
+            .and_then(OsStr::to_str)
+            .expect("SitePath holds a file name")
+    }
+
     /// The file name without its extension: `blog/post.md` gives `post`
     ///
     /// Construction guarantees a file name, so this never fails.

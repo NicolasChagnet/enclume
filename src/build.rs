@@ -60,11 +60,12 @@ impl SiteBuilder {
         reset_dir(out)?;
 
         let roots = &self.roots;
-        let draft_pattern = match self.mode {
-            BuildMode::Prod => Some(".draft"),
-            BuildMode::Dev => None,
-        };
-        let files = glob_relative(&roots.content_dir(), "**/*", draft_pattern)?;
+        // Drafts stay out of the output and out of `pages()`. `dev` keeps them
+        // anyway, so a draft can be previewed while it is written.
+        let mut files = glob_relative(&roots.content_dir(), "**/*")?;
+        if !matches!(self.mode, BuildMode::Dev) {
+            files.retain(|path| !is_draft(path));
+        }
 
         // Fingerprint the assets first: templates link to them while they render
         // Wrap in Arc for the templater so 'assets' can be used within the template functions
@@ -158,6 +159,19 @@ fn scan_assets(
         assets.insert(path.clone(), layout.copied_file(path, digest.as_deref()));
     }
     Ok(assets)
+}
+
+/// Whether a content file is a draft, marked by `.draft` in its file name
+///
+/// `blog/post.draft.md` is a draft, and so is `blog/post.draft`. The marker is its
+/// own dot-separated piece of the name, so `blog/post.drafts.md` is a regular
+/// page, like `blog/draft.md`. Only the file name counts, not the folders around
+/// it: a page inside `blog/post.draft/` is published.
+fn is_draft(path: &SitePath) -> bool {
+    path.file_name()
+        .split('.')
+        .skip(1)
+        .any(|piece| piece == "draft")
 }
 
 /// Replace `out` with the freshly built `staging` directory
@@ -360,9 +374,29 @@ mod tests {
     }
 
     #[test]
+    fn marks_drafts_by_the_draft_piece_of_the_file_name() {
+        let draft = |path: &str| is_draft(&SitePath::try_from(PathBuf::from(path)).unwrap());
+
+        assert!(draft("blog/post.draft.md"));
+        assert!(draft("blog/notes.draft.txt"));
+        assert!(draft("blog/post.draft"));
+        // The marker is a piece of the name, not just letters inside it
+        assert!(!draft("blog/post.drafts.md"));
+        assert!(!draft("blog/draft.md"));
+        assert!(!draft("blog/handcrafted.md"));
+        // Only the file name counts, not the folders above it
+        assert!(!draft("blog/post.draft/index.md"));
+    }
+
+    #[test]
     fn omits_draft_files_in_production_builds() {
         let site = Site::new();
         site.write("templates/post.html", "{{__content__}}");
+        site.write(
+            "templates/list.html",
+            "{% for page in pages(pattern=\"blog/**/*.md\") %}[{{ page.path }}]{% endfor %}",
+        );
+        site.write("root/blog/index.md", "---\ntemplate: list.html\n---\n");
         site.write(
             "root/blog/post.md",
             "---\ntemplate: post.html\nvars: {}\n---\n# published\n",
@@ -376,6 +410,11 @@ mod tests {
         site.build().unwrap();
 
         assert!(site.read("blog/post/index.html").contains("published"));
+        // The draft stays out of the listing as much as out of the output
+        assert_eq!(
+            site.read("blog/index.html"),
+            "[blog/index.md][blog/post.md]"
+        );
         assert!(!site.exists("blog/post.draft/index.html"));
         assert!(!site.exists("blog/post.draft.md"));
         assert!(!site.exists("assets/notes.draft.txt"));
@@ -385,6 +424,11 @@ mod tests {
     fn keeps_draft_files_in_development_builds() {
         let site = Site::new().with_mode(BuildMode::Dev);
         site.write("templates/post.html", "{{__content__}}");
+        site.write(
+            "templates/list.html",
+            "{% for page in pages(pattern=\"blog/**/*.md\") %}[{{ page.path }}]{% endfor %}",
+        );
+        site.write("root/blog/index.md", "---\ntemplate: list.html\n---\n");
         site.write(
             "root/blog/post.draft.md",
             "---\ntemplate: post.html\nvars: {}\n---\n# unpublished\n",
@@ -398,6 +442,11 @@ mod tests {
                 .contains("unpublished")
         );
         assert_eq!(site.read("assets/notes.draft.txt"), "wip\n");
+        // A draft is listed while it is written
+        assert_eq!(
+            site.read("blog/index.html"),
+            "[blog/index.md][blog/post.draft.md]"
+        );
     }
 
     #[test]
