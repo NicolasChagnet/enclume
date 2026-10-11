@@ -43,9 +43,15 @@ impl OutputLayout {
 
     /// The destination of a file the build rendered into HTML
     ///
-    /// `index` and `404` keep their name: the dev server and static hosts look
-    /// them up under that name.
-    pub fn rendered_page(&self, file: &SitePath) -> Result<SitePath, snafu::Whatever> {
+    /// Will match `output` if specified, otherwise determined from the file path.
+    pub fn rendered_page(
+        &self,
+        file: &SitePath,
+        output: Option<&SitePath>,
+    ) -> Result<SitePath, snafu::Whatever> {
+        if let Some(output) = output {
+            return Ok(output.clone());
+        }
         match file.file_stem() {
             "index" | "404" => Ok(file.clone().with_extension("html")),
             _ if self.clean_urls => file.clone().without_extension().join("index.html"),
@@ -61,22 +67,22 @@ impl OutputLayout {
         }
     }
 
-    /// The URL a rendered page is served at
+    /// The URL a built page is served at
     ///
     /// An `index` page is served at its directory without a trailing slash, so
-    /// `blog/index.md` becomes `/blog` and the root `index.md` becomes `/`. Every
-    /// other page uses its built name: `blog/post.md` → `/blog/post` with clean
-    /// URLs, `/about.html` without them, and `/404.html` either way.
-    pub fn page_url(&self, file: &SitePath) -> Result<String, snafu::Whatever> {
-        let page = self.rendered_page(file)?;
+    /// `blog/index.html` is served at `/blog` and the root `index.html` at `/`.
+    /// Every other built name is served as-is: `/blog/post/index.html` is
+    /// `/blog/post`, and an explicit output such as `sitemap.xml` is
+    /// `/sitemap.xml`.
+    pub fn page_url(&self, page: &SitePath) -> String {
         if page.file_stem() != "index" {
-            return Ok(format!("/{page}"));
+            return format!("/{page}");
         }
         match page.as_path().parent() {
             Some(parent) if !parent.as_os_str().is_empty() => {
-                Ok(format!("/{}", parent.to_string_lossy()))
+                format!("/{}", parent.to_string_lossy())
             }
-            _ => Ok("/".to_string()),
+            _ => "/".to_string(),
         }
     }
 }
@@ -122,17 +128,12 @@ impl Assets {
 #[derive(Debug)]
 pub struct Output<'a> {
     root: &'a Path,
-    layout: &'a OutputLayout,
     assets: &'a Assets,
 }
 
 impl<'a> Output<'a> {
-    pub fn new(root: &'a Path, layout: &'a OutputLayout, assets: &'a Assets) -> Self {
-        Self {
-            root,
-            layout,
-            assets,
-        }
+    pub fn new(root: &'a Path, assets: &'a Assets) -> Self {
+        Self { root, assets }
     }
 
     /// The destination of a file the build copies verbatim
@@ -140,9 +141,9 @@ impl<'a> Output<'a> {
         self.assets.name(file).resolve(self.root)
     }
 
-    /// The destination of a page the build rendered
-    pub fn page(&self, file: &SitePath) -> Result<PathBuf, snafu::Whatever> {
-        Ok(self.layout.rendered_page(file)?.resolve(self.root))
+    /// Where a page the build rendered lands, given its built path
+    pub fn page(&self, page: &SitePath) -> PathBuf {
+        page.resolve(self.root)
     }
 
     /// Copy `source` to `destination`, creating the parent directories
@@ -190,14 +191,14 @@ mod tests {
 
         assert_eq!(
             layout
-                .rendered_page(&site_path("about.md"))
+                .rendered_page(&site_path("about.md"), None)
                 .unwrap()
                 .as_str(),
             "about/index.html"
         );
         assert_eq!(
             layout
-                .rendered_page(&site_path("blog/post.md"))
+                .rendered_page(&site_path("blog/post.md"), None)
                 .unwrap()
                 .as_str(),
             "blog/post/index.html"
@@ -205,28 +206,45 @@ mod tests {
     }
 
     #[test]
-    fn maps_pages_to_the_url_they_are_served_at() {
-        let clean = OutputLayout::default();
-        assert_eq!(clean.page_url(&site_path("index.md")).unwrap(), "/");
+    fn renders_a_page_at_the_output_path_it_declares() {
+        let layout = OutputLayout::default();
+
         assert_eq!(
-            clean.page_url(&site_path("blog/index.md")).unwrap(),
-            "/blog"
+            layout
+                .rendered_page(&site_path("sitemap.md"), Some(&site_path("sitemap.xml")))
+                .unwrap()
+                .as_str(),
+            "sitemap.xml"
         );
-        assert_eq!(clean.page_url(&site_path("about.md")).unwrap(), "/about");
+        // The output path wins over the clean URL and index rules
         assert_eq!(
-            clean.page_url(&site_path("blog/post.md")).unwrap(),
+            layout
+                .rendered_page(
+                    &site_path("blog/index.md"),
+                    Some(&site_path("feed/rss.xml"))
+                )
+                .unwrap()
+                .as_str(),
+            "feed/rss.xml"
+        );
+    }
+
+    #[test]
+    fn maps_pages_to_the_url_they_are_served_at() {
+        let layout = OutputLayout::default();
+
+        assert_eq!(layout.page_url(&site_path("index.html")), "/");
+        assert_eq!(layout.page_url(&site_path("blog/index.html")), "/blog");
+        assert_eq!(layout.page_url(&site_path("about/index.html")), "/about");
+        assert_eq!(
+            layout.page_url(&site_path("blog/post/index.html")),
             "/blog/post"
         );
-        // `404` keeps its name under both layouts
-        assert_eq!(clean.page_url(&site_path("404.md")).unwrap(), "/404.html");
-
-        let flat = OutputLayout::new(false, false);
-        assert_eq!(
-            flat.page_url(&site_path("about.md")).unwrap(),
-            "/about.html"
-        );
-        assert_eq!(flat.page_url(&site_path("blog/index.md")).unwrap(), "/blog");
-        assert_eq!(flat.page_url(&site_path("404.md")).unwrap(), "/404.html");
+        assert_eq!(layout.page_url(&site_path("about.html")), "/about.html");
+        assert_eq!(layout.page_url(&site_path("404.html")), "/404.html");
+        // A declared output keeps its built name
+        assert_eq!(layout.page_url(&site_path("sitemap.xml")), "/sitemap.xml");
+        assert_eq!(layout.page_url(&site_path("feed/rss.xml")), "/feed/rss.xml");
     }
 
     #[test]
@@ -235,20 +253,23 @@ mod tests {
 
         assert_eq!(
             layout
-                .rendered_page(&site_path("index.md"))
+                .rendered_page(&site_path("index.md"), None)
                 .unwrap()
                 .as_str(),
             "index.html"
         );
         assert_eq!(
             layout
-                .rendered_page(&site_path("blog/index.md"))
+                .rendered_page(&site_path("blog/index.md"), None)
                 .unwrap()
                 .as_str(),
             "blog/index.html"
         );
         assert_eq!(
-            layout.rendered_page(&site_path("404.md")).unwrap().as_str(),
+            layout
+                .rendered_page(&site_path("404.md"), None)
+                .unwrap()
+                .as_str(),
             "404.html"
         );
     }
@@ -259,20 +280,23 @@ mod tests {
 
         assert_eq!(
             layout
-                .rendered_page(&site_path("about.md"))
+                .rendered_page(&site_path("about.md"), None)
                 .unwrap()
                 .as_str(),
             "about.html"
         );
         assert_eq!(
             layout
-                .rendered_page(&site_path("blog/post.md"))
+                .rendered_page(&site_path("blog/post.md"), None)
                 .unwrap()
                 .as_str(),
             "blog/post.html"
         );
         assert_eq!(
-            layout.rendered_page(&site_path("404.md")).unwrap().as_str(),
+            layout
+                .rendered_page(&site_path("404.md"), None)
+                .unwrap()
+                .as_str(),
             "404.html"
         );
     }
@@ -335,9 +359,9 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let layout = OutputLayout::default();
         let assets = Assets::default();
-        let output = Output::new(dir.path(), &layout, &assets);
+        let output = Output::new(dir.path(), &assets);
 
-        let destination = output.page(&site_path("blog/post.md")).unwrap();
+        let destination = output.page(&site_path("blog/post/index.html"));
         output.write(&destination, b"<p>body</p>").unwrap();
 
         assert_eq!(

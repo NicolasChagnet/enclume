@@ -121,14 +121,26 @@ impl ParsedContent {
         &self.metadata
     }
 
-    /// Render the content through the template it declares, for the page served at `url`
+    /// The destination the file declared for its built page, if it declared one
+    pub fn output(&self) -> Option<&SitePath> {
+        self.metadata.output()
+    }
+
+    /// Render the content through the template it declares
+    ///
+    /// `destination` is where the built page lands, `url` where it is served.
     pub fn render<T: Templater>(
         &self,
         templater: &T,
+        destination: &SitePath,
         url: &str,
     ) -> Result<RenderedContent, snafu::Whatever> {
         let html = templater.render(self.metadata.clone(), url)?;
-        Ok(RenderedContent::new(self.file.clone(), html))
+        Ok(RenderedContent::new(
+            self.file.clone(),
+            destination.clone(),
+            html,
+        ))
     }
 }
 
@@ -136,12 +148,17 @@ impl ParsedContent {
 #[derive(Debug, Clone)]
 pub struct RenderedContent {
     file: ContentFile,
+    destination: SitePath,
     html: RawHtml,
 }
 
 impl RenderedContent {
-    pub fn new(file: ContentFile, html: RawHtml) -> Self {
-        Self { file, html }
+    pub fn new(file: ContentFile, destination: SitePath, html: RawHtml) -> Self {
+        Self {
+            file,
+            destination,
+            html,
+        }
     }
 
     pub fn inner(&self) -> &RawHtml {
@@ -158,9 +175,9 @@ impl Content for RenderedContent {
         &self.file
     }
 
-    /// Write the HTML at the page destination of the source file
+    /// Write the HTML at the destination computed by the build
     fn write(&self, output: &Output) -> Result<(), snafu::Whatever> {
-        let destination = output.page(self.file.path())?;
+        let destination = output.page(&self.destination);
         output
             .write(&destination, self.html.inner().as_bytes())
             .with_whatever_context(|_| format!("Could not write {}", self.file))

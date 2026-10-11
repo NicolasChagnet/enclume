@@ -54,8 +54,9 @@ impl Pages {
         let mut pages = Vec::new();
         for content in parsed {
             let path = content.path().clone();
+            let destination = layout.rendered_page(&path, content.output())?;
             pages.push(Page {
-                url: layout.page_url(&path)?,
+                url: layout.page_url(&destination),
                 path,
                 vars: content.metadata().vars().clone(),
             });
@@ -161,6 +162,23 @@ mod tests {
         let urls: Vec<_> = pages.all().iter().map(|page| page.url()).collect();
         // Source-path order: `404.md`, `blog/index.md`, `blog/post.md`, `index.md`
         assert_eq!(urls, ["/404.html", "/blog", "/blog/post", "/"]);
+    }
+
+    #[test]
+    fn serves_a_page_at_the_output_it_declares() {
+        let (_dir, roots) = roots();
+        let file = ContentFile::locate(&roots, site_path("sitemap.md")).unwrap();
+        let data = ParsedData::new(
+            site_path("sitemap.xml"),
+            VarMap::new(),
+            serde_json::json!(""),
+        )
+        .with_output(site_path("sitemap.xml"));
+        let sitemap = ParsedContent::new(file, data);
+
+        let pages = Pages::collect([&sitemap], &OutputLayout::default()).unwrap();
+
+        assert_eq!(pages.all()[0].url(), "/sitemap.xml");
     }
 
     #[test]

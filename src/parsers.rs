@@ -39,16 +39,23 @@ impl From<String> for RawHtml {
 
 /// Frontmatter as declared by the source file
 ///
-/// The template path is validated during the conversion into [`ParsedData`].
+/// The template and output paths are validated during the conversion into
+/// [`ParsedData`].
 #[derive(Debug, Clone, Deserialize)]
 pub struct RawMetadata {
     pub template: PathBuf,
     pub vars: Option<VarMap>,
+    /// Destination of the built page, relative to the output directory
+    pub output: Option<PathBuf>,
 }
 
 impl RawMetadata {
-    pub fn new(template: PathBuf, vars: Option<VarMap>) -> Self {
-        Self { template, vars }
+    pub fn new(template: PathBuf, vars: Option<VarMap>, output: Option<PathBuf>) -> Self {
+        Self {
+            template,
+            vars,
+            output,
+        }
     }
 }
 
@@ -56,6 +63,8 @@ impl RawMetadata {
 pub struct ParsedData {
     #[serde(skip_serializing)]
     template: SitePath,
+    #[serde(skip_serializing)]
+    output: Option<SitePath>,
     vars: VarMap,
     __content__: Value,
 }
@@ -64,15 +73,30 @@ impl ParsedData {
     pub fn new(template: SitePath, vars: VarMap, __content__: Value) -> Self {
         Self {
             template,
+            output: None,
             vars,
             __content__,
         }
     }
 
+    /// Build the page at `output` instead of where the output layout would put it
+    pub fn with_output(mut self, output: SitePath) -> Self {
+        self.output = Some(output);
+        self
+    }
+
     pub fn from_raw(raw_metadata: RawMetadata, content: Value) -> Result<Self, snafu::Whatever> {
         let template = SitePath::try_from(raw_metadata.template)?;
+        let output = raw_metadata
+            .output
+            .map(|output| {
+                SitePath::try_from(output)
+                    .with_whatever_context(|_| "Invalid `output` path in frontmatter")
+            })
+            .transpose()?;
         Ok(Self {
             template,
+            output,
             vars: raw_metadata.vars.unwrap_or_default(),
             __content__: content,
         })
@@ -80,6 +104,11 @@ impl ParsedData {
 
     pub fn template(&self) -> &SitePath {
         &self.template
+    }
+
+    /// The destination the file declared for its built page, if it declared one
+    pub fn output(&self) -> Option<&SitePath> {
+        self.output.as_ref()
     }
 
     /// The variables the file declared under `vars`
@@ -637,6 +666,43 @@ mod tests {
         );
 
         assert!(error.contains("../post.html"), "unexpected error: {error}");
+    }
+
+    #[test]
+    fn reads_the_output_path_a_page_declares() {
+        let metadata = MarkdownParser::default()
+            .parse(
+                "---\ntemplate: sitemap.xml\noutput: sitemap.xml\n---\n",
+                &post_path(),
+            )
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(metadata.output().unwrap().as_str(), "sitemap.xml");
+        // The reserved output key stays out of the template context
+        assert!(metadata.as_value().unwrap().get("output").is_none());
+    }
+
+    #[test]
+    fn rejects_an_output_path_which_escapes_the_site() {
+        let error = snafu::Report::from_error(
+            MarkdownParser::default()
+                .parse(
+                    "---\ntemplate: post.html\noutput: ../sitemap.xml\n---\nbody",
+                    &post_path(),
+                )
+                .unwrap_err(),
+        );
+        let error = format!("{error}");
+
+        assert!(
+            error.contains("Invalid `output` path"),
+            "unexpected error: {error}"
+        );
+        assert!(
+            error.contains("../sitemap.xml"),
+            "unexpected error: {error}"
+        );
     }
 
     #[test]

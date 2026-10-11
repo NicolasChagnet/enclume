@@ -47,7 +47,7 @@ vars:
 Some content
 ```
 
-The `template` key is **reserved** and should refer to the template used. Templates are built using the [Tera template engine](https://keats.github.io/tera/). For example, this could be the layout
+The `template` key is **reserved** and should refer to the template used. The `output` key is **reserved** as well: it sets where the built page lands, relative to the output directory, and overrides the name the build would derive from the source. A page which declares `output: sitemap.xml` is written to `dist/sitemap.xml` and served at `/sitemap.xml`, whatever its source file is called. This is how a site builds its sitemap or its feed. Templates are built using the [Tera template engine](https://keats.github.io/tera/). For example, this could be the layout
 ```html
 <!-- layout.html -->
 <!DOCTYPE html>
@@ -88,7 +88,7 @@ A relative reference in Markdown — an image or a link — resolves against the
 
 so `blog/post/index.md` links to `/blog/post/periodogram.png`, where the asset is copied. This matters because a page is served at `/blog/post` without a trailing slash, and a browser would otherwise resolve the reference against `/blog/`. References written in raw HTML are passed through verbatim, so those must be root-relative (`/blog/post/periodogram.png`) or absolute.
 
-## Listing other pages
+### Listing other pages
 
 A template cannot read the filesystem, but it can list the pages the build parsed. The `pages()` function takes a glob pattern, relative to `root/` and with the same `{a,b}` alternatives as the file patterns, and returns the matching pages in source-path order:
 
@@ -105,7 +105,33 @@ A template cannot read the filesystem, but it can list the pages the build parse
 
 Each entry holds `path` (the source file), `url` (where it is served, clean URLs included) and `vars` (everything the file declared under `vars`). A file which declares no metadata is copied verbatim and is never a page. An invalid pattern fails the build rather than rendering an empty list.
 
-## Table of contents
+### Sitemap and feeds
+
+Sitemap and feeds need to be mapped manually using the `output` variable
+
+```markdown
+<!-- root/sitemap.md -->
+---
+template: sitemap.xml
+output: sitemap.xml
+vars:
+  site: "https://example.com"
+---
+```
+
+```xml
+<!-- templates/sitemap.xml -->
+<?xml version="1.0" encoding="UTF-8"?>
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+{% for page in pages(pattern="blog/**/*.md") %}
+    <url><loc>{{ vars.site }}{{ page.url }}</loc></url>
+{% endfor %}
+</urlset>
+```
+
+A sitemap or a feed wants absolute URLs, which the build cannot know, so the page which builds it declares the site URL itself, like any other variable. A feed is the same mechanism with `output: feed/rss.xml`: a nested output path writes `dist/feed/rss.xml`, served at `/feed/rss.xml`. An `output` which is absolute or climbs out of the output directory fails the build, like any other site path.
+
+### Table of contents
 
 The headings of a Markdown page are collected into a `toc` variable passed to the template
 
@@ -123,7 +149,7 @@ The headings of a Markdown page are collected into a `toc` variable passed to th
 
 Each entry holds the `level` of its heading (1 for `#`, 2 for `##`, and so on), the `id` a link to it ends with, and the `title` of the heading with its inline markup flattened: emphasis, strong, links and code spans read as the prose they hold. A heading which carries no id is left out of the list, so `--md-no-heading-ids` also leaves the table of contents empty.
 
-## Math
+### Math
 
 Markdown content can hold LaTeX formulas. They are typeset while the site is built, by a Rust port of [KaTeX](https://katex.org), into the markup KaTeX itself produces: HTML, plus a MathML copy of every formula for screen readers and for text selection. No JavaScript runs in the browser.
 

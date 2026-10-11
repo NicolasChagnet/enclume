@@ -69,7 +69,7 @@ impl SiteBuilder {
         // Fingerprint the assets first: templates link to them while they render
         // Wrap in Arc for the templater so 'assets' can be used within the template functions
         let assets = Arc::new(scan_assets(roots, &files, &self.layout)?);
-        let output = Output::new(out, &self.layout, &assets);
+        let output = Output::new(out, &assets);
 
         // Parsing runs first, so the `pages()` template function can list every page
         // while the templates render. Then each file is written: the ones declaring
@@ -89,9 +89,10 @@ impl SiteBuilder {
             let Some(parsed) = parsed else {
                 return file.write(&output);
             };
-            let url = self.layout.page_url(parsed.path())?;
+            let destination = self.layout.rendered_page(parsed.path(), parsed.output())?;
+            let url = self.layout.page_url(&destination);
             parsed
-                .render(&templater, &url)
+                .render(&templater, &destination, &url)
                 .with_whatever_context(|_| format!("Could not render {file}"))?
                 .write(&output)
         })
@@ -412,6 +413,47 @@ mod tests {
 
         assert!(site.read("blog/post.html").contains("<h1 id=\"body\">"));
         assert!(!site.exists("blog/post/index.html"));
+    }
+
+    #[test]
+    fn writes_pages_at_the_output_path_they_declare() {
+        let site = Site::new();
+        site.write("templates/post.html", "{{__content__}}");
+        site.write(
+            "templates/sitemap.xml",
+            "<urlset>{% for page in pages(pattern=\"blog/**/*.md\") %}\
+             <loc>{{ page.url }}</loc>{% endfor %}<self>{{ __url__ }}</self></urlset>",
+        );
+        site.write(
+            "templates/rss.xml",
+            "<rss><link>{{ __url__ }}</link>\
+             {% for page in pages(pattern=\"blog/**/*.md\") %}{{ page.vars.title }}{% endfor %}</rss>",
+        );
+        site.write(
+            "root/sitemap.md",
+            "---\ntemplate: sitemap.xml\noutput: sitemap.xml\n---\n",
+        );
+        site.write(
+            "root/feed/rss.md",
+            "---\ntemplate: rss.xml\noutput: feed/rss.xml\n---\n",
+        );
+        site.write(
+            "root/blog/post.md",
+            "---\ntemplate: post.html\nvars:\n  title: Hello & goodbye\n---\nbody\n",
+        );
+
+        site.build().unwrap();
+
+        let sitemap = site.read("sitemap.xml");
+        assert!(sitemap.contains("<loc>/blog/post</loc>"));
+        assert!(sitemap.contains("<self>/sitemap.xml</self>"));
+        assert!(!site.exists("sitemap/index.html"));
+
+        let rss = site.read("feed/rss.xml");
+        assert!(rss.contains("<link>/feed/rss.xml</link>"));
+        // XML content is escaped, like HTML
+        assert!(rss.contains("Hello &amp; goodbye"));
+        assert!(!site.exists("feed/rss/index.html"));
     }
 
     #[test]
