@@ -201,7 +201,7 @@ Three sets are always available: [Lucide](https://lucide.dev) as `lucide`, [Octi
 
 The namespace is mandatory, so the syntax never competes with an emoji shortcode. A namespace or a name which is not known is left as written, `\::lucide:zap::` escapes the construct, and `--md-disable-icons` turns the whole syntax off.
 
-The `fontawesome` feature asks something of the site which enables it. Font Awesome Free icons are CC BY 4.0: a page which renders one owes a credit, a link to the licence, and a note that the icon was changed — it is resized and recoloured to match the text. "Icons by [Font Awesome Free](https://fontawesome.com), CC BY 4.0, resized and recoloured" says all three. The other three sets ask for nothing. Every set is recorded in [crates/rushdown-icons/THIRD-PARTY-NOTICES.md](crates/rushdown-icons/THIRD-PARTY-NOTICES.md).
+The `fontawesome` feature asks something of the site which enables it. Font Awesome Free icons are CC BY 4.0: a page which renders one owes a credit, a link to the licence, and a note that the icon was changed — it is resized and recoloured to match the text. "Icons by [Font Awesome Free](https://fontawesome.com), CC BY 4.0, resized and recoloured" says all three. The other three sets ask for nothing. Every set is recorded in [THIRD-PARTY-NOTICES.md](https://github.com/NicolasChagnet/rushdown-icons/blob/main/THIRD-PARTY-NOTICES.md).
 
 Brand logos are trademarks of their owners. `::si:github::` and `::fa-brands:github::` draw someone else's mark, and neither CC0 nor CC BY grants trademark rights, so a site which renders a brand icon checks the terms of that brand.
 

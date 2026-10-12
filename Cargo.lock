@@ -496,7 +496,7 @@ dependencies = [
 
 [[package]]
 name = "enclume"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "axum",
  "blake3",
@@ -1502,6 +1502,8 @@ dependencies = [
 [[package]]
 name = "rushdown-d2"
 version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e5feadadf7daa2c96a907d33747f736fbae7f12dfb1b2872a16797b7ea4773bc"
 dependencies = [
  "rushdown",
 ]
@@ -1547,18 +1549,21 @@ dependencies = [
 [[package]]
 name = "rushdown-icons"
 version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "75c03896bf54a4266922a42a99817e67a351e9b2d1cffa351f1fc0b2dbba913f"
 dependencies = [
  "fontawesome-free-pack",
  "lucide-static-svg",
  "octicons-pack",
  "rushdown",
- "rushdown-emoji",
  "simple-icons",
 ]
 
 [[package]]
 name = "rushdown-lumis"
 version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1b4891f2db440c1984967d7a936a067861428a50977ee9f80423c99b9643de6c"
 dependencies = [
  "lumis",
  "rushdown",
@@ -1577,6 +1582,8 @@ dependencies = [
 [[package]]
 name = "rushdown-relative-links"
 version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a52abe6e5c6b72c9bc1725d0d1e53b26d3a5290983e4f4e0deda5bc620a7c1a6"
 dependencies = [
  "rushdown",
 ]
@@ -1584,6 +1591,8 @@ dependencies = [
 [[package]]
 name = "rushdown-toc"
 version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bfe46979caeafad9a5a69ffe09ac37b12dff7789fc2a2b51f8a5cc010ebc7f61"
 dependencies = [
  "rushdown",
  "serde",
