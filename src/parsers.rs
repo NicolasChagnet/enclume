@@ -209,6 +209,7 @@ pub struct MarkdownParserOptions {
     allow_raw_html: bool,
     enable_footnotes: bool,
     enable_emojis: bool,
+    enable_icons: bool,
     enable_diagrams: bool,
     enable_d2: bool,
     enable_fenced_divs: bool,
@@ -226,6 +227,7 @@ impl Default for MarkdownParserOptions {
             allow_raw_html: true,
             enable_footnotes: true,
             enable_emojis: true,
+            enable_icons: true,
             enable_diagrams: true,
             enable_d2: true,
             enable_fenced_divs: true,
@@ -261,6 +263,11 @@ impl MarkdownParserOptions {
 
     pub fn with_emojis(mut self, enabled: bool) -> Self {
         self.enable_emojis = enabled;
+        self
+    }
+
+    pub fn with_icons(mut self, enabled: bool) -> Self {
+        self.enable_icons = enabled;
         self
     }
 
@@ -337,6 +344,10 @@ impl MarkdownParserOptions {
                     .apply(parser);
                 }
 
+                if options.enable_icons {
+                    rushdown_icons::icons_parser_extension().apply(parser);
+                }
+
                 if options.enable_diagrams {
                     rushdown_diagram::diagram_parser_extension(
                         rushdown_diagram::DiagramParserOptions::default(),
@@ -375,6 +386,13 @@ impl MarkdownParserOptions {
                 if options.enable_emojis {
                     rushdown_emoji::emoji_html_renderer_extension(
                         rushdown_emoji::EmojiHtmlRendererOptions::default(),
+                    )
+                    .apply(renderer);
+                }
+
+                if options.enable_icons {
+                    rushdown_icons::icons_html_renderer_extension(
+                        rushdown_icons::IconsHtmlRendererOptions::default(),
                     )
                     .apply(renderer);
                 }
@@ -752,6 +770,20 @@ mod tests {
 
         assert!(content.contains("<h1"));
         assert!(content.contains("<em>emphasis</em>"));
+    }
+
+    #[test]
+    fn renders_icons_unless_disabled() {
+        let markdown = "---\ntemplate: post.html\nvars: {}\n---\n::lucide:arrow-left::\n";
+
+        let icons = rendered_markdown(&MarkdownParser::default(), markdown);
+        assert!(icons.contains("<svg"), "{icons}");
+
+        let plain = rendered_markdown(
+            &MarkdownParser::new(MarkdownParserOptions::default().with_icons(false)),
+            markdown,
+        );
+        assert!(plain.contains("::lucide:arrow-left::"), "{plain}");
     }
 
     #[test]

@@ -187,6 +187,24 @@ or as a `math` block:
 ```
 ````
 
+### Icons
+
+An icon is a namespace and a name between double colons. It renders as an inline `<svg>` which takes the size and the colour of the text around it, so prose needs no stylesheet:
+
+```markdown
+Press ::lucide:arrow-left:: to go back, or see the branch history with ::octicon:git-branch::.
+```
+
+Three sets are always available: [Lucide](https://lucide.dev) as `lucide`, [Octicons](https://primer.style/octicons) as `octicon`, and [Simple Icons](https://simpleicons.org) as `si`. An Octicon may be named without its size, so `::octicon:git-branch::` and `::octicon:git-branch-24::` draw the same icon. Simple Icons are named as the brand publishes them, so `::si:rust::` and `::si:Rust::` both work.
+
+[Font Awesome Free](https://fontawesome.com) sits behind the `fontawesome` feature, which is off by default: `cargo build --features fontawesome` compiles in `::fa:rocket::`, `::fa-solid:rocket::`, `::fa-regular:bell::` and `::fa-brands:github::`.
+
+The namespace is mandatory, so the syntax never competes with an emoji shortcode. A namespace or a name which is not known is left as written, `\::lucide:zap::` escapes the construct, and `--md-disable-icons` turns the whole syntax off.
+
+The `fontawesome` feature asks something of the site which enables it. Font Awesome Free icons are CC BY 4.0: a page which renders one owes a credit, a link to the licence, and a note that the icon was changed — it is resized and recoloured to match the text. "Icons by [Font Awesome Free](https://fontawesome.com), CC BY 4.0, resized and recoloured" says all three. The other three sets ask for nothing. Every set is recorded in [crates/rushdown-icons/THIRD-PARTY-NOTICES.md](crates/rushdown-icons/THIRD-PARTY-NOTICES.md).
+
+Brand logos are trademarks of their owners. `::si:github::` and `::fa-brands:github::` draw someone else's mark, and neither CC0 nor CC BY grants trademark rights, so a site which renders a brand icon checks the terms of that brand.
+
 ## AI usage
 
 AI was mainly used for repetitive tasks and reviewing code. The design and core code is otherwise handwritten. This is NOT a vibecoded project.

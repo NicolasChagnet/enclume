@@ -1,0 +1,21 @@
+[package]
+name = "rushdown-icons"
+version = "0.1.0"
+edition = "2024"
+description = "Inline SVG icon sets for rushdown markdown parser"
+license = "MIT"
+repository = "https://github.com/NicolasChagnet/enclume"
+
+[features]
+default = []
+fontawesome = ["dep:fontawesome-free-pack"]
+
+[dependencies]
+fontawesome-free-pack = { version = "7.3.1", optional = true }
+lucide-static-svg = "1.55.0"
+octicons-pack = "19.38.0"
+rushdown = { workspace = true }
+simple-icons = "0.1.1"
+
+[dev-dependencies]
+rushdown-emoji = "0.9.8"

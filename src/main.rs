@@ -73,6 +73,9 @@ struct MarkdownParserCliOptions {
     /// Do not parse emoji shortcodes
     #[arg(long = "md-disable-emojis")]
     disable_emojis: bool,
+    /// Do not parse icon names
+    #[arg(long = "md-disable-icons")]
+    disable_icons: bool,
     /// Do not parse diagram blocks
     #[arg(long = "md-disable-diagrams")]
     disable_diagrams: bool,
@@ -112,6 +115,7 @@ impl From<MarkdownParserCliOptions> for MarkdownParserOptions {
             .with_raw_html(!value.no_raw_html)
             .with_footnotes(!value.disable_footnotes)
             .with_emojis(!value.disable_emojis)
+            .with_icons(!value.disable_icons)
             .with_diagrams(!value.disable_diagrams)
             .with_d2(!value.disable_d2)
             .with_fenced_divs(!value.disable_fenced_divs)
@@ -233,5 +237,21 @@ mod tests {
         let value = metadata.as_value().unwrap();
         let content = value["__content__"].as_str().unwrap();
         assert!(content.contains(":smile:"));
+
+        let options: MarkdownParserOptions = MarkdownParserCliOptions {
+            disable_icons: true,
+            ..Default::default()
+        }
+        .into();
+        let metadata = MarkdownParser::new(options)
+            .parse(
+                "---\ntemplate: post.html\nvars: {}\n---\n::lucide:arrow-left::\n",
+                &path,
+            )
+            .unwrap()
+            .expect("expected frontmatter");
+        let value = metadata.as_value().unwrap();
+        let content = value["__content__"].as_str().unwrap();
+        assert!(content.contains("::lucide:arrow-left::"), "{content}");
     }
 }

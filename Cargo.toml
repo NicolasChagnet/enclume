@@ -1,6 +1,7 @@
 [workspace]
 members = [
     "crates/rushdown-d2",
+    "crates/rushdown-icons",
     "crates/rushdown-lumis",
     "crates/rushdown-relative-links",
     "crates/rushdown-toc",
@@ -8,6 +9,9 @@ members = [
 
 [workspace.dependencies]
 rushdown = "0.18.0"
+
+[features]
+fontawesome = ["rushdown-icons/fontawesome"]
 
 [package]
 name = "enclume"
@@ -35,6 +39,7 @@ rushdown-diagram = "0.10.2"
 rushdown-emoji = "0.9.8"
 rushdown-fenced-div = "0.1.5"
 rushdown-footnote = "0.9.8"
+rushdown-icons = { path = "crates/rushdown-icons" }
 rushdown-relative-links = { path = "crates/rushdown-relative-links" }
 rushdown-toc = { path = "crates/rushdown-toc" }
 rushdown-lumis = { path = "crates/rushdown-lumis" }
